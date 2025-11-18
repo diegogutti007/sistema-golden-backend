@@ -50,40 +50,44 @@ pool.getConnection((err) => {
 //app.use("/api/gastos", gastosRoutes);
 
 // 🔹 CONEXIÓN PARA PRODUCCIÓN (Railway) - REEMPLAZA TU CÓDIGO ACTUAL
+
+// 🔥 CONEXIÓN CORREGIDA PARA RAILWAY
 const pool = mysql.createPool({
   host: process.env.MYSQLHOST || 'localhost',
   user: process.env.MYSQLUSER || 'root',
-  password: process.env.MYSQLPASSWORD || 'mysql',
+  password: process.env.MYSQLPASSWORD || '',
   database: process.env.MYSQLDATABASE || 'proyecto_golden',
   port: process.env.MYSQLPORT || 3306,
   waitForConnections: true,
   connectionLimit: 10,
   queueLimit: 0,
-  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
-  connectTimeout: 60000,
-  acquireTimeout: 60000,
-  timeout: 60000
+  // REMOVER estas líneas problemáticas:
+  // connectTimeout: 60000,
+  // acquireTimeout: 60000,
+  // timeout: 60000,
+  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
 });
 
-// Verificar conexión al iniciar
+// Verificar conexión
 pool.getConnection((err, connection) => {
   if (err) {
-    console.error('❌ Error de conexión a la base de datos: ', err);
-    console.log('Variables de entorno:', {
-      host: process.env.MYSQLHOST,
-      user: process.env.MYSQLUSER,
-      database: process.env.MYSQLDATABASE,
-      port: process.env.MYSQLPORT
+    console.error('❌ Error de conexión a la base de datos:', err.message);
+    console.log('🔍 Variables de entorno disponibles:', {
+      MYSQLHOST: process.env.MYSQLHOST,
+      MYSQLUSER: process.env.MYSQLUSER,
+      MYSQLDATABASE: process.env.MYSQLDATABASE,
+      MYSQLPORT: process.env.MYSQLPORT,
+      NODE_ENV: process.env.NODE_ENV
     });
-    process.exit(1);
   } else {
-    console.log('✅ Conectado a la base de datos en Railway');
+    console.log('✅ Conectado a MySQL en Railway');
+    console.log('📊 Base de datos:', process.env.MYSQLDATABASE);
     connection.release();
   }
 });
 
 
-// Agrega esta ruta para diagnosticar
+/* // Agrega esta ruta para diagnosticar
 app.get('/debug', (req, res) => {
   res.json({
     environment: process.env.NODE_ENV,
@@ -96,9 +100,22 @@ app.get('/debug', (req, res) => {
     },
     allEnvVars: process.env
   });
+}); */
+
+// Agregar esta ruta para debug
+app.get('/health', (req, res) => {
+  res.json({
+    status: 'Server running',
+    database: {
+      host: process.env.MYSQLHOST,
+      user: process.env.MYSQLUSER,
+      database: process.env.MYSQLDATABASE,
+      port: process.env.MYSQLPORT,
+      connected: false // Lo verificaremos después
+    },
+    environment: process.env.NODE_ENV
+  });
 });
-
-
 
 
 
