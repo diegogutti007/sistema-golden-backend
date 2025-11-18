@@ -12,6 +12,12 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+
+app.use(cors({
+  origin: "https://goldennails.vercel.app",
+  credentials: true
+}));
+
 //app.use("/api/gastos", gastosRoutes);
 
 // 🔹 Configuración de la base de datos y servidor en el mismo archivo
