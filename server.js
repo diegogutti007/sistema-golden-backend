@@ -42,10 +42,10 @@ pool.getConnection((err) => {
   }
 }); */
 
-app.use(cors({
+/* app.use(cors({
   origin: "https://goldennails.vercel.app",
   credentials: true
-}));
+})); */
 
 //app.use("/api/gastos", gastosRoutes);
 
