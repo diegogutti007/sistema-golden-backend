@@ -13,7 +13,7 @@ app.use(cors());
 app.use(express.json());
 
 
-app.use(cors({
+/* app.use(cors({
   origin: "https://goldennails.vercel.app",
   credentials: true
 }));
@@ -40,7 +40,67 @@ pool.getConnection((err) => {
   } else {
     console.log('✅ Conectado a la base de datos');
   }
+}); */
+
+app.use(cors({
+  origin: "https://goldennails.vercel.app",
+  credentials: true
+}));
+
+//app.use("/api/gastos", gastosRoutes);
+
+// 🔹 CONEXIÓN PARA PRODUCCIÓN (Railway) - REEMPLAZA TU CÓDIGO ACTUAL
+const pool = mysql.createPool({
+  host: process.env.MYSQLHOST || 'localhost',
+  user: process.env.MYSQLUSER || 'root',
+  password: process.env.MYSQLPASSWORD || 'mysql',
+  database: process.env.MYSQLDATABASE || 'proyecto_golden',
+  port: process.env.MYSQLPORT || 3306,
+  waitForConnections: true,
+  connectionLimit: 10,
+  queueLimit: 0,
+  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
+  connectTimeout: 60000,
+  acquireTimeout: 60000,
+  timeout: 60000
 });
+
+// Verificar conexión al iniciar
+pool.getConnection((err, connection) => {
+  if (err) {
+    console.error('❌ Error de conexión a la base de datos: ', err);
+    console.log('Variables de entorno:', {
+      host: process.env.MYSQLHOST,
+      user: process.env.MYSQLUSER,
+      database: process.env.MYSQLDATABASE,
+      port: process.env.MYSQLPORT
+    });
+    process.exit(1);
+  } else {
+    console.log('✅ Conectado a la base de datos en Railway');
+    connection.release();
+  }
+});
+
+
+// Agrega esta ruta para diagnosticar
+app.get('/debug', (req, res) => {
+  res.json({
+    environment: process.env.NODE_ENV,
+    mysqlVars: {
+      host: process.env.MYSQLHOST,
+      user: process.env.MYSQLUSER,
+      database: process.env.MYSQLDATABASE,
+      port: process.env.MYSQLPORT,
+      hasPassword: !!process.env.MYSQLPASSWORD
+    },
+    allEnvVars: process.env
+  });
+});
+
+
+
+
 
 // Verificar conexión
 pool.getConnection((err, connection) => {
