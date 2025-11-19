@@ -4,7 +4,8 @@
   "description": "",
   "main": "server.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "build": "CI=false react-scripts build",
+    "build:safe": "DISABLE_ESLINT_PLUGIN=true react-scripts build"
   },
   "author": "",
   "license": "ISC",

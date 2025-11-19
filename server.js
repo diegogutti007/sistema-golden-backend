@@ -1,12 +1,10 @@
 // server.js
 const express = require('express');
-const cors = require('cors');
 const mysql = require('mysql2');
-//const mysql = require("mysql2/promise");
-const router = express.Router();
-//import gastosRoutes from "./routes/gastos.js";
+//const router = express.Router();
 const bcryptjs = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const cors = require('cors');
 
 const app = express();
 app.use(cors());
@@ -51,41 +49,26 @@ pool.getConnection((err) => {
 
 // 🔹 CONEXIÓN PARA PRODUCCIÓN (Railway) - REEMPLAZA TU CÓDIGO ACTUAL
 
-// 🔥 CONEXIÓN CORREGIDA PARA RAILWAY
+// ✅ MIDDLEWARES ESENCIALES
+app.use(cors({
+  origin: process.env.FRONTEND_URL || "http://localhost:3000",
+  credentials: true
+}));
+
+app.use(express.json()); // ✅ IMPORTANTE: Para parsear JSON
+
+// ✅ CONEXIÓN A BASE DE DATOS PARA RAILWAY
 const pool = mysql.createPool({
   host: process.env.MYSQLHOST || 'localhost',
   user: process.env.MYSQLUSER || 'root',
-  password: process.env.MYSQLPASSWORD || '',
+  password: process.env.MYSQLPASSWORD || 'mysql',
   database: process.env.MYSQLDATABASE || 'proyecto_golden',
   port: process.env.MYSQLPORT || 3306,
   waitForConnections: true,
   connectionLimit: 10,
   queueLimit: 0,
-  // REMOVER estas líneas problemáticas:
-  // connectTimeout: 60000,
-  // acquireTimeout: 60000,
-  // timeout: 60000,
   ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
 });
-
-// Verificar conexión
-pool.getConnection((err, connection) => {
-  if (err) {
-    console.error('❌ Error de conexión a la base de datos:', err.message);
-    console.log('🔍 Variables de entorno disponibles:', {
-      MYSQLHOST: process.env.MYSQLHOST,
-      MYSQLUSER: process.env.MYSQLUSER,
-      MYSQLDATABASE: process.env.MYSQLDATABASE,
-      MYSQLPORT: process.env.MYSQLPORT,
-      NODE_ENV: process.env.NODE_ENV
-    });
-  } else {
-    console.log('✅ Conectado a MySQL en Railway');
-    console.log('📊 Base de datos:', process.env.MYSQLDATABASE);
-    connection.release();
-  }
-});
-
 
 /* // Agrega esta ruta para diagnosticar
 app.get('/debug', (req, res) => {
@@ -119,17 +102,6 @@ app.get('/health', (req, res) => {
 
 
 
-// Verificar conexión
-pool.getConnection((err, connection) => {
-  if (err) {
-    console.error('❌ Error de conexión a la base de datos:', err.message);
-  } else {
-    console.log('✅ Conectado a la base de datos proyecto_golden');
-    connection.release();
-  }
-});
-
-
 
 // Middleware de log
 app.use((req, res, next) => {
@@ -137,8 +109,31 @@ app.use((req, res, next) => {
   next();
 });
 
-// 🔐 RUTA DE LOGIN
+/// ✅ VERIFICAR CONEXIÓN A BD
+pool.getConnection((err, connection) => {
+  if (err) {
+    console.error('❌ Error conectando a MySQL:', err.message);
+  } else {
+    console.log('✅ Conectado a MySQL en Railway');
+    connection.release();
+  }
+});
+
+// ✅ HEALTH CHECK ENDPOINT
+app.get('/health', (req, res) => {
+  res.json({ 
+    status: 'OK', 
+    message: 'Backend funcionando',
+    timestamp: new Date().toISOString(),
+    environment: process.env.NODE_ENV,
+    database: process.env.MYSQLDATABASE || 'No configurada'
+  });
+});
+
+// ✅ RUTA DE LOGIN MEJORADA
 app.post('/api/auth/login', (req, res) => {
+  console.log('🔐 Intento de login recibido:', req.body);
+  
   const { usuario, contrasena } = req.body;
 
   if (!usuario || !contrasena) {
@@ -152,7 +147,7 @@ app.post('/api/auth/login', (req, res) => {
   
   pool.query(sql, [usuario], async (err, results) => {
     if (err) {
-      console.error('Error en consulta SQL:', err);
+      console.error('❌ Error en consulta SQL:', err);
       return res.status(500).json({ 
         success: false,
         error: 'Error en la base de datos' 
@@ -160,6 +155,7 @@ app.post('/api/auth/login', (req, res) => {
     }
 
     if (results.length === 0) {
+      console.log('❌ Usuario no encontrado:', usuario);
       return res.status(401).json({ 
         success: false,
         error: 'Usuario o contraseña incorrectos' 
@@ -167,6 +163,7 @@ app.post('/api/auth/login', (req, res) => {
     }
 
     const user = results[0];
+    console.log('👤 Usuario encontrado:', user.usuario);
 
     if (user.estado !== 'activo') {
       return res.status(401).json({ 
@@ -176,23 +173,25 @@ app.post('/api/auth/login', (req, res) => {
     }
 
     try {
-      // ✅ CORREGIDO: usar bcryptjs en lugar de bcrypt
+      // ✅ VERIFICAR CONTRASEÑA
       const isPasswordValid = await bcryptjs.compare(contrasena, user.contrasena);
       
       if (!isPasswordValid) {
+        console.log('❌ Contraseña incorrecta para:', usuario);
         return res.status(401).json({ 
           success: false,
           error: 'Usuario o contraseña incorrectos' 
         });
       }
 
+      // ✅ GENERAR TOKEN
       const token = jwt.sign(
         { 
           usuario_id: user.usuario_id, 
           usuario: user.usuario,
           rol: user.rol 
         },
-        'secreto_golden_nails_2024',
+        process.env.JWT_SECRET || 'secreto_golden_nails_2024',
         { expiresIn: '24h' }
       );
 
@@ -216,7 +215,7 @@ app.post('/api/auth/login', (req, res) => {
       });
 
     } catch (error) {
-      console.error('Error en bcryptjs:', error);
+      console.error('❌ Error en bcryptjs:', error);
       res.status(500).json({ 
         success: false,
         error: 'Error interno del servidor' 
@@ -225,12 +224,11 @@ app.post('/api/auth/login', (req, res) => {
   });
 });
 
-// 👑 CREAR USUARIO ADMIN
+// ✅ CREAR USUARIO ADMIN (SI NO EXISTE)
 app.post('/api/auth/create-admin', async (req, res) => {
   const password = 'admin123';
   
   try {
-    // ✅ CORREGIDO: usar bcryptjs
     const hashedPassword = await bcryptjs.hash(password, 10);
 
     const sql = `INSERT INTO usuario (nombre, apellido, usuario, correo, contrasena, rol, estado) 
@@ -244,13 +242,14 @@ app.post('/api/auth/create-admin', async (req, res) => {
             message: 'El usuario admin ya existe'
           });
         }
-        console.error('Error creando admin:', err);
+        console.error('❌ Error creando admin:', err);
         return res.status(500).json({ 
           success: false,
           error: 'Error creando usuario admin' 
         });
       }
 
+      console.log('✅ Usuario admin creado');
       res.json({
         success: true,
         message: 'Usuario admin creado exitosamente',
@@ -262,7 +261,7 @@ app.post('/api/auth/create-admin', async (req, res) => {
     });
     
   } catch (error) {
-    console.error('Error hasheando contraseña:', error);
+    console.error('❌ Error hasheando contraseña:', error);
     res.status(500).json({ 
       success: false,
       error: 'Error creando usuario admin' 
@@ -270,13 +269,13 @@ app.post('/api/auth/create-admin', async (req, res) => {
   }
 });
 
-// 🔍 VERIFICAR TABLA
+// ✅ VERIFICAR TABLA USUARIO
 app.get('/api/auth/check-table', (req, res) => {
   const sql = "SHOW TABLES LIKE 'usuario'";
   
   pool.query(sql, (err, results) => {
     if (err) {
-      console.error('Error verificando tabla:', err);
+      console.error('❌ Error verificando tabla:', err);
       return res.status(500).json({ error: 'Error en base de datos' });
     }
     
@@ -286,13 +285,13 @@ app.get('/api/auth/check-table', (req, res) => {
   });
 });
 
-// 👥 VER USUARIOS
+// ✅ LISTAR USUARIOS
 app.get('/api/auth/users', (req, res) => {
   const sql = 'SELECT usuario_id, nombre, usuario, correo, rol, estado FROM usuario';
   
   pool.query(sql, (err, results) => {
     if (err) {
-      console.error('Error obteniendo usuarios:', err);
+      console.error('❌ Error obteniendo usuarios:', err);
       return res.status(500).json({ error: 'Error en base de datos' });
     }
     
