@@ -8,7 +8,7 @@ const cors = require('cors');
 const app = express();
 
 // ✅ CONFIGURACIÓN CORS MEJORADA
-app.use(cors({
+/* app.use(cors({
   origin: [
     "https://sistemagolden.up.railway.app",
     "http://localhost:3000",
@@ -20,7 +20,68 @@ app.use(cors({
 }));
 
 // ✅ MANEJAR PREFLIGHT REQUESTS
-app.options('*', cors());
+app.options('*', cors()); */
+
+// ✅ CONFIGURACIÓN CORS MEJORADA
+const corsOptions = {
+  origin: function (origin, callback) {
+    // Permitir requests sin origin (como mobile apps o curl)
+    if (!origin) return callback(null, true);
+    
+    const allowedOrigins = [
+      "https://sistemagolden.up.railway.app",
+      "http://localhost:3000",
+      "http://localhost:5173",
+      "https://sistemagolden-backend-production.up.railway.app"
+    ];
+    
+    if (allowedOrigins.indexOf(origin) !== -1) {
+      callback(null, true);
+    } else {
+      console.log('❌ Origen bloqueado por CORS:', origin);
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
+  allowedHeaders: [
+    'Content-Type', 
+    'Authorization', 
+    'X-Requested-With',
+    'Accept',
+    'Origin',
+    'Access-Control-Request-Method',
+    'Access-Control-Request-Headers'
+  ],
+  exposedHeaders: ['Authorization'],
+  preflightContinue: false,
+  optionsSuccessStatus: 204
+};
+
+app.use(cors(corsOptions));
+
+// ✅ MANEJAR PREFLIGHT REQUESTS EXPLÍCITAMENTE
+app.options('*', cors(corsOptions));
+
+// ✅ MIDDLEWARE PERSONALIZADO PARA CORS (backup)
+app.use((req, res, next) => {
+  // Headers CORS básicos
+  res.header('Access-Control-Allow-Origin', 'https://sistemagolden.up.railway.app');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
+  res.header('Access-Control-Allow-Credentials', 'true');
+  
+  // Responder inmediatamente a las solicitudes OPTIONS
+  if (req.method === 'OPTIONS') {
+    console.log('🔄 Preflight request recibida');
+    return res.status(200).end();
+  }
+  
+  next();
+});
+
+
+
 
 app.use(express.json());
 
