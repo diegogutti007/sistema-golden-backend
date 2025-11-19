@@ -55,9 +55,9 @@ app.use(cors({
   credentials: true
 }));
 
-app.use(express.json()); // ✅ IMPORTANTE: Para parsear JSON
+app.use(express.json());
 
-// ✅ CONEXIÓN A BASE DE DATOS PARA RAILWAY
+// ✅ CONEXIÓN A BASE DE DATOS OPTIMIZADA PARA RAILWAY
 const pool = mysql.createPool({
   host: process.env.MYSQLHOST || 'localhost',
   user: process.env.MYSQLUSER || 'root',
@@ -67,7 +67,8 @@ const pool = mysql.createPool({
   waitForConnections: true,
   connectionLimit: 10,
   queueLimit: 0,
-  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
+  // ✅ SSL CORREGIDO PARA RAILWAY
+  ssl: process.env.MYSQLHOST ? { rejectUnauthorized: false } : false
 });
 
 /* // Agrega esta ruta para diagnosticar
