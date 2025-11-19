@@ -7,10 +7,10 @@ const cors = require('cors');
 
 const app = express();
 
-// ✅ CONFIGURACIÓN CORS MEJORADA - PERMITE TU FRONTEND EN VERCEL
+// ✅ CONFIGURACIÓN CORS MEJORADA
 app.use(cors({
   origin: [
-    "https://sistemagolden.up.railway.app", // Tu frontend en Vercel
+    "https://sistemagolden.up.railway.app",
     "http://localhost:3000",
     "http://localhost:5173"
   ],
@@ -24,11 +24,11 @@ app.options('*', cors());
 
 app.use(express.json());
 
-// ✅ CONEXIÓN A BASE DE DATOS OPTIMIZADA PARA RAILWAY
+// ✅ CONEXIÓN A BASE DE DATOS OPTIMIZADA
 const pool = mysql.createPool({
   host: process.env.MYSQLHOST || 'yamanote.proxy.rlwy.net',
   user: process.env.MYSQLUSER || 'root',
-  password: process.env.MYSQLPASSWORD || 'sqIqWLyrtCbSWodmEwMWKQipEjHOwrzC',
+  password: process.env.MYSQLPASSWORD || 'mysql',
   database: process.env.MYSQLDATABASE || 'proyecto_golden',
   port: process.env.MYSQLPORT || 22744,
   waitForConnections: true,
@@ -76,7 +76,7 @@ app.get('/health', async (req, res) => {
       message: '✅ Backend funcionando correctamente'
     });
   } catch (error) {
-    res.json({ 
+    res.status(500).json({ 
       status: 'server running', 
       database: {
         connected: false,
@@ -89,6 +89,46 @@ app.get('/health', async (req, res) => {
     });
   }
 });
+
+// 🔐 MIDDLEWARE DE AUTENTICACIÓN
+const authenticateToken = (req, res, next) => {
+  const publicRoutes = [
+    '/api/auth/login',
+    '/api/auth/create-admin', 
+    '/api/auth/check-table',
+    '/api/test',
+    '/health',
+    '/'
+  ];
+  
+  if (publicRoutes.includes(req.path)) {
+    return next();
+  }
+
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1];
+
+  if (!token) {
+    console.log('❌ Token no proporcionado para ruta:', req.path);
+    return res.status(401).json({ 
+      success: false,
+      error: 'Token de acceso requerido' 
+    });
+  }
+
+  jwt.verify(token, process.env.JWT_SECRET || 'secreto_golden_nails_2024', (err, user) => {
+    if (err) {
+      console.log('❌ Token inválido:', err.message);
+      return res.status(403).json({ 
+        success: false,
+        error: 'Token inválido o expirado' 
+      });
+    }
+    
+    req.user = user;
+    next();
+  });
+};
 
 // ✅ RUTA DE LOGIN MEJORADA
 app.post('/api/auth/login', (req, res) => {
@@ -246,7 +286,7 @@ app.get('/api/auth/check-table', (req, res) => {
 });
 
 // ✅ LISTAR USUARIOS
-app.get('/api/auth/users', (req, res) => {
+app.get('/api/auth/users', authenticateToken, (req, res) => {
   const sql = 'SELECT usuario_id, nombre, usuario, correo, rol, estado FROM usuario';
   
   pool.query(sql, (err, results) => {
@@ -270,7 +310,7 @@ app.get('/api/test', (req, res) => {
 
 ///////////////////Empleados/////////////////////////////////////////////////////////////
 // 🔹 Combobox tipo_empleado
-app.get('/api/tipo-empleado', (req, res) => {
+app.get('/api/tipo-empleado', authenticateToken, (req, res) => {
   pool.query('SELECT * FROM tipo_empleado', (err, results) => {
     if (err) {
       console.error('❌ Error en la consulta:', err);
@@ -281,7 +321,7 @@ app.get('/api/tipo-empleado', (req, res) => {
 });
 
 // 🔹 Combobox cargo_empleado
-app.get('/api/cargo-empleado', (req, res) => {
+app.get('/api/cargo-empleado', authenticateToken, (req, res) => {
   pool.query('SELECT * FROM Cargo_Empleado', (err, results) => {
     if (err) {
       console.error('❌ Error en la consulta:', err);
@@ -291,8 +331,8 @@ app.get('/api/cargo-empleado', (req, res) => {
   });
 });
 
-//  Añadir empleados
-app.post('/api/empleado', (req, res) => {
+// Añadir empleados
+app.post('/api/empleado', authenticateToken, (req, res) => {
   const { nombres, apellidos, docId, tipo_EmpId, cargo_EmpId, fechaNacimiento, fechaIngreso, direccion, sueldo } = req.body;
 
   const query = `
@@ -313,8 +353,8 @@ app.post('/api/empleado', (req, res) => {
   );
 });
 
-//  Listar empleados
-app.get('/api/listaempleado', (req, res) => {
+// Listar empleados
+app.get('/api/listaempleado', authenticateToken, (req, res) => {
   const query = `
     SELECT e.EmpId, e.Nombres, e.Apellidos, e.DocID, 
            e.Direccion, e.FechaNacimiento, e.Sueldo, e.fecha_ingreso, e.fecha_renuncia, t.Tipo_EmpId,
@@ -335,7 +375,7 @@ app.get('/api/listaempleado', (req, res) => {
 });
 
 // Modificar empleado
-app.put('/api/empleado/:id', (req, res) => {
+app.put('/api/empleado/:id', authenticateToken, (req, res) => {
   const empleadoId = req.params.id;
   const {
     nombres,
@@ -411,7 +451,7 @@ app.put('/api/empleado/:id', (req, res) => {
 });
 
 // 🗑️ Eliminar empleado
-app.delete('/api/empleado/:id', (req, res) => {
+app.delete('/api/empleado/:id', authenticateToken, (req, res) => {
   const { id } = req.params;
 
   pool.query('DELETE FROM empleado WHERE EmpId = ?', [id], (err, result) => {
@@ -425,7 +465,7 @@ app.delete('/api/empleado/:id', (req, res) => {
 
 ///////////////////Citas/////////////////////////////////////////////////////////////
 // ✅ Obtener todas las citas
-app.get('/api/citas', (req, res) => {
+app.get('/api/citas', authenticateToken, (req, res) => {
   const query = `
     SELECT c.*, CONCAT(p.nombre, ' ', p.apellido) AS ClienteNombre, CONCAT(e.nombres, ' ', e.apellidos) AS EmpleadoNombre
     FROM citas c
@@ -459,7 +499,7 @@ app.get('/api/citas', (req, res) => {
 });
 
 // ✅ Crear cita
-app.post('/api/citas', (req, res) => {
+app.post('/api/citas', authenticateToken, (req, res) => {
   const { ClienteID, EmpId, Titulo, Descripcion, FechaInicio, FechaFin, Estado } = req.body;
   const query = `
     INSERT INTO citas (ClienteID, EmpId, Titulo, Descripcion, FechaInicio, FechaFin, Estado)
@@ -477,7 +517,7 @@ app.post('/api/citas', (req, res) => {
 });
 
 // ✅ Actualizar cita
-app.put('/api/citas/:id', (req, res) => {
+app.put('/api/citas/:id', authenticateToken, (req, res) => {
   const { id } = req.params;
   const { ClienteID, EmpId, Titulo, Descripcion, FechaInicio, FechaFin, Estado } = req.body;
   const query = `
@@ -492,7 +532,7 @@ app.put('/api/citas/:id', (req, res) => {
 });
 
 // ✅ Eliminar cita
-app.delete('/api/citas/:id', (req, res) => {
+app.delete('/api/citas/:id', authenticateToken, (req, res) => {
   const { id } = req.params;
   pool.query('DELETE FROM citas WHERE CitaID=?', [id], err => {
     if (err) return res.status(500).json({ error: 'Error al eliminar cita' });
@@ -501,7 +541,7 @@ app.delete('/api/citas/:id', (req, res) => {
 });
 
 // ✅ Obtener citas filtradas para combo
-app.get("/api/citascombo", (req, res) => {
+app.get("/api/citascombo", authenticateToken, (req, res) => {
   const { search = "" } = req.query;
 
   const sql = `
@@ -536,7 +576,7 @@ app.get("/api/citascombo", (req, res) => {
 });
 
 ///////////////////Clientes/////////////////////////////////////////////////////////////
-app.get('/api/clientes', (req, res) => {
+app.get('/api/clientes', authenticateToken, (req, res) => {
   pool.query('SELECT * FROM cliente', (err, results) => {
     if (err) {
       console.error('❌ Error obteniendo clientes:', err);
@@ -546,7 +586,7 @@ app.get('/api/clientes', (req, res) => {
   });
 });
 
-app.post('/api/clientes', (req, res) => {
+app.post('/api/clientes', authenticateToken, (req, res) => {
   const { Nombre, Apellido, Telefono, Email } = req.body;
   if (!Nombre || !Apellido) {
     return res.status(400).json({ error: 'Nombre y Apellido son obligatorios' });
@@ -567,7 +607,7 @@ app.post('/api/clientes', (req, res) => {
 });
 
 ///////////////////Gastos/////////////////////////////////////////////////////////////
-app.post("/api/gastos", (req, res) => {
+app.post("/api/gastos", authenticateToken, (req, res) => {
   const { descripcion, monto, categoria_id, periodo_id, fecha_gasto, observaciones, EmpId, pagos } = req.body;
 
   if (!descripcion || !monto || !categoria_id || !periodo_id) {
@@ -605,7 +645,7 @@ app.post("/api/gastos", (req, res) => {
       `;
       conn.query(
         insertGasto,
-        [descripcion, monto, categoria_id, periodo_id, fecha_gasto, observaciones || null, EmpId || null, 1],
+        [descripcion, monto, categoria_id, periodo_id, fecha_gasto, observaciones || null, EmpId || null, req.user.usuario_id],
         (err, result) => {
           if (err) {
             return conn.rollback(() => {
@@ -669,7 +709,7 @@ app.post("/api/gastos", (req, res) => {
 });
 
 // ✅ Obtener categorias
-app.get('/api/categorias', (req, res) => {
+app.get('/api/categorias', authenticateToken, (req, res) => {
   pool.query('SELECT categoria_id, nombre FROM categoria_gasto ORDER BY nombre', (err, results) => {
     if (err) {
       console.error('❌ Error al obtener categorías:', err);
@@ -680,7 +720,7 @@ app.get('/api/categorias', (req, res) => {
 });
 
 // ✅ Obtener periodos
-app.get('/api/periodos', (req, res) => {
+app.get('/api/periodos', authenticateToken, (req, res) => {
   pool.query('SELECT periodo_id, nombre FROM periodo ORDER BY fecha_inicio DESC', (err, results) => {
     if (err) {
       console.error('❌ Error al obtener periodos:', err);
@@ -691,7 +731,7 @@ app.get('/api/periodos', (req, res) => {
 });
 
 // ✅ Obtener tipos de pago
-app.get('/api/tipo_pago', (req, res) => {
+app.get('/api/tipo_pago', authenticateToken, (req, res) => {
   pool.query('SELECT tipo_pago_id, nombre FROM tipo_pago ORDER BY nombre', (err, results) => {
     if (err) {
       console.error('❌ Error al obtener tipos de pago:', err);
@@ -702,7 +742,7 @@ app.get('/api/tipo_pago', (req, res) => {
 });
 
 // ✅ Obtener tipos de venta
-app.get('/api/tipos_venta', (req, res) => {
+app.get('/api/tipos_venta', authenticateToken, (req, res) => {
   pool.query('SELECT Tipo_VentaID, Descripcion FROM tipo_venta', (err, results) => {
     if (err) {
       console.error('❌ Error obteniendo tipos de venta:', err);
@@ -713,7 +753,7 @@ app.get('/api/tipos_venta', (req, res) => {
 });
 
 // 🔹 Obtener todos los artículos
-app.get("/api/articulos", (req, res) => {
+app.get("/api/articulos", authenticateToken, (req, res) => {
   pool.query("SELECT * FROM Articulo", (err, results) => {
     if (err) return res.status(500).json({ error: err });
     res.json(results);
@@ -721,7 +761,7 @@ app.get("/api/articulos", (req, res) => {
 });
 
 // 🔹 Obtener tipos de pago para ventas
-app.get("/api/tipos_pago", (req, res) => {
+app.get("/api/tipos_pago", authenticateToken, (req, res) => {
   pool.query("SELECT * FROM tipo_pago", (err, results) => {
     if (err) return res.status(500).json({ error: err });
     res.json(results);
@@ -729,7 +769,7 @@ app.get("/api/tipos_pago", (req, res) => {
 });
 
 // 🔹 Registrar una nueva venta
-app.post("/api/ventas", (req, res) => {
+app.post("/api/ventas", authenticateToken, (req, res) => {
   const { ClienteID, FechaVenta, Total, Detalles, Pagos, CitaID, Observaciones } = req.body;
 
   if (!ClienteID || !Detalles?.length || !Pagos?.length)
@@ -751,7 +791,7 @@ app.post("/api/ventas", (req, res) => {
 
       connection.query(
         sqlVenta,
-        [ClienteID, FechaVenta, Total, CitaID || null, Observaciones || null, 1, 'Pagada'],
+        [ClienteID, FechaVenta, Total, CitaID || null, Observaciones || null, req.user.usuario_id, 'Pagada'],
         (err, resultVenta) => {
           if (err) {
             return connection.rollback(() => {
@@ -855,7 +895,7 @@ app.post("/api/ventas", (req, res) => {
 });
 
 // Listar ventas
-app.get('/api/venta', (req, res) => {
+app.get('/api/venta', authenticateToken, (req, res) => {
   const { page = 1, limit = 8, search = "" } = req.query;
   const offset = (page - 1) * limit;
 
@@ -901,7 +941,7 @@ app.get('/api/venta', (req, res) => {
 });
 
 // Obtener venta por ID
-app.get("/api/venta/:id", (req, res) => {
+app.get("/api/venta/:id", authenticateToken, (req, res) => {
   const { id } = req.params;
 
   const sqlVenta = `
@@ -976,7 +1016,7 @@ app.get("/api/venta/:id", (req, res) => {
 });
 
 // Eliminar venta
-app.delete("/api/venta/:id", (req, res) => {
+app.delete("/api/venta/:id", authenticateToken, (req, res) => {
   const { id } = req.params;
 
   pool.getConnection((err, conn) => {
@@ -1039,7 +1079,7 @@ app.delete("/api/venta/:id", (req, res) => {
 });
 
 // ✅ Obtener resumen de comisiones por empleado
-app.get("/api/comisiones", (req, res) => {
+app.get("/api/comisiones", authenticateToken, (req, res) => {
   const { fechaInicio, fechaFin } = req.query;
 
   if (!fechaInicio || !fechaFin) {
@@ -1077,7 +1117,7 @@ app.get("/api/comisiones", (req, res) => {
 });
 
 // ✅ Obtener detalle de ventas de un empleado
-app.get("/api/comisiones/:empId", (req, res) => {
+app.get("/api/comisiones/:empId", authenticateToken, (req, res) => {
   const { empId } = req.params;
   const { fechaInicio, fechaFin } = req.query;
 
@@ -1114,7 +1154,7 @@ app.get("/api/comisiones/:empId", (req, res) => {
 // ============================================================
 
 // ✅ 1. Listar todos los gastos
-app.get("/api/gastos", (req, res) => {
+app.get("/api/gastos", authenticateToken, (req, res) => {
   const sql = `
     SELECT g.*, c.nombre AS categoria_nombre, CONCAT(e.nombre, ' ', e.apellido) AS usuario_nombre
     FROM gastos g
@@ -1132,7 +1172,7 @@ app.get("/api/gastos", (req, res) => {
 });
 
 // ✅ 5. Eliminar gasto
-app.delete("/api/gastos/:id", (req, res) => {
+app.delete("/api/gastos/:id", authenticateToken, (req, res) => {
   const { id } = req.params;
   const sql = "DELETE FROM gastos WHERE gasto_id = ?";
   pool.query(sql, [id], (err) => {
@@ -1145,7 +1185,7 @@ app.delete("/api/gastos/:id", (req, res) => {
 });
 
 // Estadísticas de ventas
-app.get('/api/estadisticas/ventas', (req, res) => {
+app.get('/api/estadisticas/ventas', authenticateToken, (req, res) => {
   const { search, fechaInicio, fechaFin } = req.query;
   
   console.log('📊 Parámetros recibidos:', { search, fechaInicio, fechaFin });
@@ -1202,51 +1242,8 @@ app.get('/api/estadisticas/ventas', (req, res) => {
   });
 });
 
-// 🔐 MIDDLEWARE DE AUTENTICACIÓN
-const authenticateToken = (req, res, next) => {
-  const publicRoutes = [
-    '/api/auth/login',
-    '/api/auth/create-admin', 
-    '/api/auth/check-table',
-    '/api/test',
-    '/health',
-    '/'
-  ];
-  
-  if (publicRoutes.includes(req.path)) {
-    return next();
-  }
-
-  const authHeader = req.headers['authorization'];
-  const token = authHeader && authHeader.split(' ')[1];
-
-  if (!token) {
-    console.log('❌ Token no proporcionado para ruta:', req.path);
-    return res.status(401).json({ 
-      success: false,
-      error: 'Token de acceso requerido' 
-    });
-  }
-
-  jwt.verify(token, process.env.JWT_SECRET || 'secreto_golden_nails_2024', (err, user) => {
-    if (err) {
-      console.log('❌ Token inválido:', err.message);
-      return res.status(403).json({ 
-        success: false,
-        error: 'Token inválido o expirado' 
-      });
-    }
-    
-    req.user = user;
-    next();
-  });
-};
-
-// 🔐 APLICAR MIDDLEWARE A TODAS LAS RUTAS DEL API
-app.use('/api', authenticateToken);
-
 // RUTAS DE PERFIL Y CAMBIO DE CONTRASEÑA
-app.post('/api/auth/cambiar-password', async (req, res) => {
+app.post('/api/auth/cambiar-password', authenticateToken, async (req, res) => {
   const { passwordActual, nuevoPassword } = req.body;
   const usuarioId = req.user.usuario_id;
 
@@ -1331,7 +1328,7 @@ app.post('/api/auth/cambiar-password', async (req, res) => {
 });
 
 // 🔄 RUTA PARA ACTUALIZAR PERFIL DE USUARIO
-app.put('/api/auth/perfil', async (req, res) => {
+app.put('/api/auth/perfil', authenticateToken, async (req, res) => {
   const { nombre, apellido, correo, telefono, direccion } = req.body;
   const usuarioId = req.user.usuario_id;
 
@@ -1406,7 +1403,7 @@ app.put('/api/auth/perfil', async (req, res) => {
 });
 
 // 👤 RUTA PARA OBTENER DATOS DEL PERFIL
-app.get('/api/auth/perfil', (req, res) => {
+app.get('/api/auth/perfil', authenticateToken, (req, res) => {
   const usuarioId = req.user.usuario_id;
 
   const sql = 'SELECT usuario_id, nombre, apellido, usuario, correo, telefono, direccion, rol, estado FROM usuario WHERE usuario_id = ?';
