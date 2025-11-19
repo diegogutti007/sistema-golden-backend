@@ -10,6 +10,8 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+//mysql://root:sqIqWLyrtCbSWodmEwMWKQipEjHOwrzC@yamanote.proxy.rlwy.net:22744/railway
+
 
 /* app.use(cors({
   origin: "https://goldennails.vercel.app",
@@ -59,11 +61,11 @@ app.use(express.json());
 
 // ✅ CONEXIÓN A BASE DE DATOS OPTIMIZADA PARA RAILWAY
 const pool = mysql.createPool({
-  host: process.env.MYSQLHOST || 'localhost',
+  host: process.env.MYSQLHOST || 'yamanote.proxy.rlwy.net',
   user: process.env.MYSQLUSER || 'root',
-  password: process.env.MYSQLPASSWORD || 'mysql',
+  password: process.env.MYSQLPASSWORD || 'sqIqWLyrtCbSWodmEwMWKQipEjHOwrzC',
   database: process.env.MYSQLDATABASE || 'proyecto_golden',
-  port: process.env.MYSQLPORT || 3306,
+  port: process.env.MYSQLPORT || 22744,
   waitForConnections: true,
   connectionLimit: 10,
   queueLimit: 0,
