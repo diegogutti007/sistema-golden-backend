@@ -12,9 +12,9 @@ app.use((req, res, next) => {
   
   // Orígenes permitidos
   const allowedOrigins = [
-    'https://sistemagolden.up.railway.app',
-    'http://localhost:3000',
-    'http://localhost:5173'
+    'https://sistemagolden.up.railway.app'//,
+    //'http://localhost:3000',
+    //'http://localhost:5173'
   ];
   
   const origin = req.headers.origin;
