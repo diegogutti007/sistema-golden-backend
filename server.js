@@ -1,7 +1,5 @@
-// server.js
 const express = require('express');
 const mysql = require('mysql2');
-//const router = express.Router();
 const bcryptjs = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const cors = require('cors');
@@ -9,53 +7,6 @@ const cors = require('cors');
 const app = express();
 app.use(cors());
 app.use(express.json());
-
-
-/* app.use(cors({
-  origin: "https://goldennails.vercel.app",
-  credentials: true
-}));
-
-//app.use("/api/gastos", gastosRoutes);
-
-// 🔹 Configuración de la base de datos y servidor en el mismo archivo
-const pool = mysql.createPool({
-  host: 'localhost',
-  user: 'root',
-  password: 'mysql',
-  database: 'proyecto_golden',
-  port: 3306, // Puerto de MySQL (no confundir con el del servidor Express)
-  waitForConnections: true,
-  connectionLimit: 10,
-  queueLimit: 0,
-});
-
-// Verificar conexión al iniciar
-pool.getConnection((err) => {
-  if (err) {
-    console.error('❌ Error de conexión a la base de datos: ', err);
-    process.exit(1);
-  } else {
-    console.log('✅ Conectado a la base de datos');
-  }
-}); */
-
-/* app.use(cors({
-  origin: "https://goldennails.vercel.app",
-  credentials: true
-})); */
-
-//app.use("/api/gastos", gastosRoutes);
-
-// 🔹 CONEXIÓN PARA PRODUCCIÓN (Railway) - REEMPLAZA TU CÓDIGO ACTUAL
-
-// ✅ MIDDLEWARES ESENCIALES
-/* app.use(cors({
-  origin: process.env.FRONTEND_URL || "http://localhost:3000",
-  credentials: true
-}));
-
-app.use(express.json()); // ✅ IMPORTANTE: Para parsear JSON
 
 // ✅ CONEXIÓN A BASE DE DATOS PARA RAILWAY
 const pool = mysql.createPool({
@@ -68,48 +19,9 @@ const pool = mysql.createPool({
   connectionLimit: 10,
   queueLimit: 0,
   ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
-}); */
-
-/* // Agrega esta ruta para diagnosticar
-app.get('/debug', (req, res) => {
-  res.json({
-    environment: process.env.NODE_ENV,
-    mysqlVars: {
-      host: process.env.MYSQLHOST,
-      user: process.env.MYSQLUSER,
-      database: process.env.MYSQLDATABASE,
-      port: process.env.MYSQLPORT,
-      hasPassword: !!process.env.MYSQLPASSWORD
-    },
-    allEnvVars: process.env
-  });
-}); */
-
-/* // Agregar esta ruta para debug
-app.get('/health', (req, res) => {
-  res.json({
-    status: 'Server running',
-    database: {
-      host: process.env.MYSQLHOST,
-      user: process.env.MYSQLUSER,
-      database: process.env.MYSQLDATABASE,
-      port: process.env.MYSQLPORT,
-      connected: false // Lo verificaremos después
-    },
-    environment: process.env.NODE_ENV
-  });
 });
 
-
-
-
-// Middleware de log
-app.use((req, res, next) => {
-  console.log(`${new Date().toISOString()} - ${req.method} ${req.path}`);
-  next();
-});
-
-/// ✅ VERIFICAR CONEXIÓN A BD
+// ✅ VERIFICAR CONEXIÓN A BD
 pool.getConnection((err, connection) => {
   if (err) {
     console.error('❌ Error conectando a MySQL:', err.message);
@@ -119,7 +31,7 @@ pool.getConnection((err, connection) => {
   }
 });
 
-// ✅ HEALTH CHECK ENDPOINT
+// ✅ HEALTH CHECK ENDPOINT (RUTA PÚBLICA)
 app.get('/health', (req, res) => {
   res.json({ 
     status: 'OK', 
@@ -130,7 +42,7 @@ app.get('/health', (req, res) => {
   });
 });
 
-// ✅ RUTA DE LOGIN MEJORADA
+// ✅ RUTA DE LOGIN (RUTA PÚBLICA - DEBE ESTAR ANTES DEL MIDDLEWARE)
 app.post('/api/auth/login', (req, res) => {
   console.log('🔐 Intento de login recibido:', req.body);
   
@@ -224,7 +136,7 @@ app.post('/api/auth/login', (req, res) => {
   });
 });
 
-// ✅ CREAR USUARIO ADMIN (SI NO EXISTE)
+// ✅ CREAR USUARIO ADMIN (RUTA PÚBLICA)
 app.post('/api/auth/create-admin', async (req, res) => {
   const password = 'admin123';
   
@@ -269,7 +181,7 @@ app.post('/api/auth/create-admin', async (req, res) => {
   }
 });
 
-// ✅ VERIFICAR TABLA USUARIO
+// ✅ VERIFICAR TABLA USUARIO (RUTA PÚBLICA)
 app.get('/api/auth/check-table', (req, res) => {
   const sql = "SHOW TABLES LIKE 'usuario'";
   
@@ -285,93 +197,58 @@ app.get('/api/auth/check-table', (req, res) => {
   });
 });
 
-// ✅ LISTAR USUARIOS
-app.get('/api/auth/users', (req, res) => {
-  const sql = 'SELECT usuario_id, nombre, usuario, correo, rol, estado FROM usuario';
-  
-  pool.query(sql, (err, results) => {
-    if (err) {
-      console.error('❌ Error obteniendo usuarios:', err);
-      return res.status(500).json({ error: 'Error en base de datos' });
-    }
-    
-    res.json({ users: results });
-  });
-});
-
-// 🧪 RUTA DE PRUEBA
+// ✅ TEST ENDPOINT (RUTA PÚBLICA)
 app.get('/api/test', (req, res) => {
   res.json({ 
     success: true,
     message: 'Servidor funcionando correctamente',
     timestamp: new Date().toISOString()
   });
-}); */
-
-// ✅ CONEXIÓN SIMPLIFICADA
-const pool = mysql.createPool({
-  host: process.env.MYSQLHOST,
-  user: process.env.MYSQLUSER,
-  password: process.env.MYSQLPASSWORD,
-  database: process.env.MYSQLDATABASE,
-  port: process.env.MYSQLPORT,
-  ssl: { rejectUnauthorized: false }
 });
 
-// ✅ HEALTH CHECK
-app.get('/health', (req, res) => {
-  res.json({ 
-    status: 'OK', 
-    message: 'Backend funcionando',
-    timestamp: new Date().toISOString()
-  });
-});
-
-// ✅ LOGIN SIMPLIFICADO PARA TESTING
-app.post('/api/auth/login', (req, res) => {
-  console.log('📧 Login attempt received:', req.body);
+// 🔐 MIDDLEWARE DE AUTENTICACIÓN (DEBE IR DESPUÉS DE LAS RUTAS PÚBLICAS)
+const authenticateToken = (req, res, next) => {
+  // Excluir rutas públicas explícitamente
+  const publicRoutes = [
+    '/api/auth/login',
+    '/api/auth/create-admin', 
+    '/api/auth/check-table',
+    '/api/test',
+    '/health',
+    '/'
+  ];
   
-  const { usuario, contrasena } = req.body;
+  if (publicRoutes.includes(req.path)) {
+    return next();
+  }
 
-  // Validación básica
-  if (!usuario || !contrasena) {
-    return res.status(400).json({ 
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1];
+
+  if (!token) {
+    console.log('❌ Token no proporcionado para ruta:', req.path);
+    return res.status(401).json({ 
       success: false,
-      error: 'Usuario y contraseña son requeridos' 
+      error: 'Token de acceso requerido' 
     });
   }
 
-  // Para testing - acepta cualquier usuario/contraseña
-  if (usuario && contrasena) {
-    return res.json({
-      success: true,
-      message: 'Login exitoso (modo testing)',
-      token: 'token-test-' + Date.now(),
-      user: {
-        id: 1,
-        nombre: 'Usuario Test',
-        usuario: usuario,
-        rol: 'admin'
-      }
-    });
-  }
-});
-
-// ✅ TEST ENDPOINT
-app.get('/api/auth/test', (req, res) => {
-  res.json({ 
-    message: 'GET funciona correctamente',
-    method: 'GET'
+  jwt.verify(token, process.env.JWT_SECRET || 'secreto_golden_nails_2024', (err, user) => {
+    if (err) {
+      console.log('❌ Token inválido:', err.message);
+      return res.status(403).json({ 
+        success: false,
+        error: 'Token inválido o expirado' 
+      });
+    }
+    
+    req.user = user;
+    next();
   });
-});
+};
 
-app.post('/api/auth/test', (req, res) => {
-  res.json({ 
-    message: 'POST funciona correctamente',
-    method: 'POST',
-    body: req.body
-  });
-});
+// 🔐 APLICAR MIDDLEWARE SOLO A RUTAS PROTEGIDAS
+app.use('/api', authenticateToken);
 
 
 
@@ -1891,9 +1768,9 @@ app.use((req, res) => {
   });
 });
 
-
 // 🔹 Configuración del puerto del servidor Express
-const PORT = 5000;
+const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
-  console.log(`🚀 Servidor corriendo en http://localhost:${PORT}`);
+  console.log(`🚀 Servidor corriendo en puerto ${PORT}`);
+  console.log(`🌍 Entorno: ${process.env.NODE_ENV || 'development'}`);
 });
