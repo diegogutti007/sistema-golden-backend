@@ -1,55 +1,11 @@
 // server.js
 const express = require('express');
 const mysql = require('mysql2');
-//const router = express.Router();
 const bcryptjs = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const cors = require('cors');
 
 const app = express();
-app.use(cors());
-app.use(express.json());
-
-//mysql://root:sqIqWLyrtCbSWodmEwMWKQipEjHOwrzC@yamanote.proxy.rlwy.net:22744/railway
-
-
-/* app.use(cors({
-  origin: "https://goldennails.vercel.app",
-  credentials: true
-}));
-
-//app.use("/api/gastos", gastosRoutes);
-
-// 🔹 Configuración de la base de datos y servidor en el mismo archivo
-const pool = mysql.createPool({
-  host: 'localhost',
-  user: 'root',
-  password: 'mysql',
-  database: 'proyecto_golden',
-  port: 3306, // Puerto de MySQL (no confundir con el del servidor Express)
-  waitForConnections: true,
-  connectionLimit: 10,
-  queueLimit: 0,
-});
-
-// Verificar conexión al iniciar
-pool.getConnection((err) => {
-  if (err) {
-    console.error('❌ Error de conexión a la base de datos: ', err);
-    process.exit(1);
-  } else {
-    console.log('✅ Conectado a la base de datos');
-  }
-}); */
-
-/* app.use(cors({
-  origin: "https://goldennails.vercel.app",
-  credentials: true
-})); */
-
-//app.use("/api/gastos", gastosRoutes);
-
-// 🔹 CONEXIÓN PARA PRODUCCIÓN (Railway) - REEMPLAZA TU CÓDIGO ACTUAL
 
 // ✅ MIDDLEWARES ESENCIALES
 app.use(cors({
@@ -69,42 +25,23 @@ const pool = mysql.createPool({
   waitForConnections: true,
   connectionLimit: 10,
   queueLimit: 0,
-  // ✅ SSL CORREGIDO PARA RAILWAY
   ssl: process.env.MYSQLHOST ? { rejectUnauthorized: false } : false
 });
 
-/* // Agrega esta ruta para diagnosticar
-app.get('/debug', (req, res) => {
-  res.json({
-    environment: process.env.NODE_ENV,
-    mysqlVars: {
-      host: process.env.MYSQLHOST,
-      user: process.env.MYSQLUSER,
-      database: process.env.MYSQLDATABASE,
-      port: process.env.MYSQLPORT,
-      hasPassword: !!process.env.MYSQLPASSWORD
-    },
-    allEnvVars: process.env
-  });
-}); */
-
-// Agregar esta ruta para debug
-app.get('/health', (req, res) => {
-  res.json({
-    status: 'Server running',
-    database: {
-      host: process.env.MYSQLHOST,
-      user: process.env.MYSQLUSER,
-      database: process.env.MYSQLDATABASE,
-      port: process.env.MYSQLPORT,
-      connected: false // Lo verificaremos después
-    },
-    environment: process.env.NODE_ENV
-  });
+// ✅ VERIFICAR CONEXIÓN A BD
+pool.getConnection((err, connection) => {
+  if (err) {
+    console.error('❌ Error conectando a MySQL:', err.message);
+    console.log('🔍 Variables de entorno:');
+    console.log('- MYSQLHOST:', process.env.MYSQLHOST);
+    console.log('- MYSQLUSER:', process.env.MYSQLUSER);
+    console.log('- MYSQLDATABASE:', process.env.MYSQLDATABASE);
+    console.log('- MYSQLPORT:', process.env.MYSQLPORT);
+  } else {
+    console.log('✅ Conectado a MySQL en Railway');
+    connection.release();
+  }
 });
-
-
-
 
 // Middleware de log
 app.use((req, res, next) => {
@@ -112,25 +49,36 @@ app.use((req, res, next) => {
   next();
 });
 
-/// ✅ VERIFICAR CONEXIÓN A BD
-pool.getConnection((err, connection) => {
-  if (err) {
-    console.error('❌ Error conectando a MySQL:', err.message);
-  } else {
-    console.log('✅ Conectado a MySQL en Railway');
-    connection.release();
-  }
-});
-
 // ✅ HEALTH CHECK ENDPOINT
-app.get('/health', (req, res) => {
-  res.json({ 
-    status: 'OK', 
-    message: 'Backend funcionando',
-    timestamp: new Date().toISOString(),
-    environment: process.env.NODE_ENV,
-    database: process.env.MYSQLDATABASE || 'No configurada'
-  });
+app.get('/health', async (req, res) => {
+  try {
+    const connection = await pool.promise().getConnection();
+    const [rows] = await connection.execute('SELECT 1 as test');
+    connection.release();
+    
+    res.json({ 
+      status: 'healthy', 
+      database: {
+        connected: true,
+        name: process.env.MYSQLDATABASE,
+        host: process.env.MYSQLHOST,
+        user: process.env.MYSQLUSER
+      },
+      message: '✅ Backend funcionando correctamente'
+    });
+  } catch (error) {
+    res.json({ 
+      status: 'server running', 
+      database: {
+        connected: false,
+        error: error.message,
+        name: process.env.MYSQLDATABASE,
+        host: process.env.MYSQLHOST,
+        user: process.env.MYSQLUSER
+      },
+      environment: 'production'
+    });
+  }
 });
 
 // ✅ RUTA DE LOGIN MEJORADA
@@ -311,16 +259,6 @@ app.get('/api/test', (req, res) => {
   });
 });
 
-
-
-
-
-
-
-
-
-
-
 ///////////////////Empleados/////////////////////////////////////////////////////////////
 // 🔹 Combobox tipo_empleado
 app.get('/api/tipo-empleado', (req, res) => {
@@ -333,8 +271,7 @@ app.get('/api/tipo-empleado', (req, res) => {
   });
 });
 
-
-// 🔹 Combobox tipo_empleado
+// 🔹 Combobox cargo_empleado
 app.get('/api/cargo-empleado', (req, res) => {
   pool.query('SELECT * FROM Cargo_Empleado', (err, results) => {
     if (err) {
@@ -370,7 +307,7 @@ app.post('/api/empleado', (req, res) => {
 //  Listar empleados
 app.get('/api/listaempleado', (req, res) => {
   const query = `
-         SELECT e.EmpId, e.Nombres, e.Apellidos, e.DocID, 
+    SELECT e.EmpId, e.Nombres, e.Apellidos, e.DocID, 
            e.Direccion, e.FechaNacimiento, e.Sueldo, e.fecha_ingreso, e.fecha_renuncia, t.Tipo_EmpId,
            t.Descripcion AS TipoEmpleado, t.Comision, c.Cargo_EmpId, c.Descripcion
     FROM Empleado e
@@ -388,8 +325,6 @@ app.get('/api/listaempleado', (req, res) => {
   });
 });
 
-
-
 // Modificar empleado
 app.put('/api/empleado/:id', (req, res) => {
   const empleadoId = req.params.id;
@@ -406,7 +341,6 @@ app.put('/api/empleado/:id', (req, res) => {
     sueldo
   } = req.body;
 
-  // Validar campos requeridos
   if (!nombres || !apellidos || !docId || !tipo_EmpId || !fechaNacimiento || !fechaIngreso || !sueldo || !cargo_EmpId ) {
     return res.status(400).json({ 
       error: "Todos los campos excepto fecha_renuncia son requeridos" 
@@ -437,7 +371,7 @@ app.put('/api/empleado/:id', (req, res) => {
     cargo_EmpId,
     fechaNacimiento,
     fechaIngreso,
-    fechaRenuncia || null, // Puede ser NULL si no hay fecha de renuncia
+    fechaRenuncia || null,
     direccion,
     parseFloat(sueldo),
     empleadoId
@@ -467,8 +401,6 @@ app.put('/api/empleado/:id', (req, res) => {
   });
 });
 
-
-
 // 🗑️ Eliminar empleado
 app.delete('/api/empleado/:id', (req, res) => {
   const { id } = req.params;
@@ -483,10 +415,10 @@ app.delete('/api/empleado/:id', (req, res) => {
 });
 
 ///////////////////Citas/////////////////////////////////////////////////////////////
-// ✅ Obtener todas las citas/form Citas
+// ✅ Obtener todas las citas
 app.get('/api/citas', (req, res) => {
   const query = `
-        SELECT c.*, CONCAT(p.nombre, ' ', p.apellido) AS ClienteNombre, CONCAT(e.nombres, ' ', e.apellidos) AS EmpleadoNombre
+    SELECT c.*, CONCAT(p.nombre, ' ', p.apellido) AS ClienteNombre, CONCAT(e.nombres, ' ', e.apellidos) AS EmpleadoNombre
     FROM citas c
     LEFT JOIN cliente p ON c.ClienteID = p.ClienteID
     LEFT JOIN Empleado e ON c.EmpId = e.EmpId
@@ -495,7 +427,6 @@ app.get('/api/citas', (req, res) => {
   pool.query(query, (err, results) => {
     if (err) return res.status(500).json({ error: 'Error al obtener citas' });
 
-    // Adaptar al formato que usa FullCalendar
     const eventos = results.map(r => ({
       id: r.CitaID,
       title: r.Titulo || r.ClienteNombre || 'Cita sin título',
@@ -503,11 +434,9 @@ app.get('/api/citas', (req, res) => {
       start: r.FechaInicio,
       end: r.FechaFin,
       backgroundColor:
-        r.Estado === 'Cancelada' ? '#f87171' : // rojo
-          r.Estado === 'Completada' ? '#34d399' : // verde
-            '#60a5fa', // azul
+        r.Estado === 'Cancelada' ? '#f87171' :
+          r.Estado === 'Completada' ? '#34d399' : '#60a5fa',
       extendedProps: {
-        //descripcion: r.Descripcion,
         clienteNombre: r.ClienteNombre,
         empleadoNombre: r.EmpleadoNombre,
         estado: r.Estado,
@@ -562,10 +491,9 @@ app.delete('/api/citas/:id', (req, res) => {
   });
 });
 
-
-// ✅ Obtener citas filtradas para combo con búsqueda
+// ✅ Obtener citas filtradas para combo
 app.get("/api/citascombo", (req, res) => {
-  const { search = "" } = req.query; // parámetro opcional ?search=
+  const { search = "" } = req.query;
 
   const sql = `
     SELECT DISTINCT
@@ -589,7 +517,7 @@ app.get("/api/citascombo", (req, res) => {
 
   const filtro = `%${search}%`;
 
-  pool.query(sql, [filtro, filtro, filtro], (err, results) => {
+  pool.query(sql, [filtro], (err, results) => {
     if (err) {
       console.error("❌ Error obteniendo Citas combo:", err);
       return res.status(500).json({ error: "Error al obtener citas" });
@@ -597,10 +525,6 @@ app.get("/api/citascombo", (req, res) => {
     res.json(results);
   });
 });
-
-
-
-
 
 ///////////////////Clientes/////////////////////////////////////////////////////////////
 app.get('/api/clientes', (req, res) => {
@@ -653,7 +577,6 @@ app.post("/api/gastos", (req, res) => {
     });
   }
 
-  // 🔹 Iniciar conexión y transacción -- gastos
   pool.getConnection((err, conn) => {
     if (err) {
       console.error("❌ Error obteniendo conexión:", err);
@@ -667,7 +590,6 @@ app.post("/api/gastos", (req, res) => {
         return res.status(500).json({ success: false, message: "Error al iniciar transacción" });
       }
 
-      // 🧾 Insertar gasto principal
       const insertGasto = `
         INSERT INTO gastos (descripcion, monto, categoria_id, periodo_id, fecha_gasto, observaciones, EmpId, usuario_id)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -686,7 +608,6 @@ app.post("/api/gastos", (req, res) => {
 
           const gastoId = result.insertId;
 
-          // 💳 Insertar tipos de pago
           const insertPago = `
             INSERT INTO gasto_tipo_pago (gasto_id, tipo_pago_id, monto)
             VALUES (?, ?, ?)
@@ -697,7 +618,7 @@ app.post("/api/gastos", (req, res) => {
               const tipoId = parseInt(pago.tipo_pago_id, 10);
               const montoPago = parseFloat(pago.monto);
 
-              if (!tipoId || isNaN(tipoId) || isNaN(montoPago)) return resolve(); // ignora vacíos
+              if (!tipoId || isNaN(tipoId) || isNaN(montoPago)) return resolve();
 
               conn.query(insertPago, [gastoId, tipoId, montoPago], (err) => {
                 if (err) reject(err);
@@ -706,7 +627,6 @@ app.post("/api/gastos", (req, res) => {
             });
           });
 
-          // 🔁 Ejecutar todos los inserts de pagos
           Promise.all(promises)
             .then(() => {
               conn.commit((err) => {
@@ -738,7 +658,6 @@ app.post("/api/gastos", (req, res) => {
     });
   });
 });
-
 
 // ✅ Obtener categorias
 app.get('/api/categorias', (req, res) => {
@@ -773,11 +692,6 @@ app.get('/api/tipo_pago', (req, res) => {
   });
 });
 
-
-
-
-
-
 // ✅ Obtener tipos de venta
 app.get('/api/tipos_venta', (req, res) => {
   pool.query('SELECT Tipo_VentaID, Descripcion FROM tipo_venta', (err, results) => {
@@ -785,15 +699,6 @@ app.get('/api/tipos_venta', (req, res) => {
       console.error('❌ Error obteniendo tipos de venta:', err);
       return res.status(500).json({ error: 'Error al obtener tipos de venta' });
     }
-    res.json(results);
-  });
-});
-
-
-// 🔹 Obtener todos los clientes
-app.get("/api/clientes", (req, res) => {
-  pool.query("SELECT * FROM cliente", (err, results) => {
-    if (err) return res.status(500).json({ error: err });
     res.json(results);
   });
 });
@@ -806,7 +711,7 @@ app.get("/api/articulos", (req, res) => {
   });
 });
 
-// 🔹 Obtener tipos de pago
+// 🔹 Obtener tipos de pago para ventas
 app.get("/api/tipos_pago", (req, res) => {
   pool.query("SELECT * FROM tipo_pago", (err, results) => {
     if (err) return res.status(500).json({ error: err });
@@ -814,7 +719,7 @@ app.get("/api/tipos_pago", (req, res) => {
   });
 });
 
-// 🔹 Registrar una nueva venta (con pool y EmpID por detalle)
+// 🔹 Registrar una nueva venta
 app.post("/api/ventas", (req, res) => {
   const { ClienteID, FechaVenta, Total, Detalles, Pagos, CitaID, Observaciones } = req.body;
 
@@ -830,7 +735,6 @@ app.post("/api/ventas", (req, res) => {
         return res.status(500).json({ error: "Error al iniciar transacción." });
       }
 
-      // 1️⃣ Insertar venta (sin EmpID)
       const sqlVenta = `
         INSERT INTO venta (ClienteID, FechaVenta, Total, CitaID, Observaciones, usuario_id, Estado)
         VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -849,7 +753,6 @@ app.post("/api/ventas", (req, res) => {
 
           const ventaID = resultVenta.insertId;
 
-          // 2️⃣ Insertar detalles (ahora con EmpID)
           const sqlDetalle = `
             INSERT INTO venta_detalle (VentaID, ArticuloID, Cantidad, PrecioUnitario, EmpID)
             VALUES ?
@@ -870,7 +773,6 @@ app.post("/api/ventas", (req, res) => {
               });
             }
 
-            // 3️⃣ Insertar tipos de pago
             const sqlPagos = `
               INSERT INTO venta_tipo_pago (VentaID, tipo_pago_id, monto)
               VALUES ?
@@ -889,7 +791,6 @@ app.post("/api/ventas", (req, res) => {
                 });
               }
 
-              // 🔹 NUEVO: Actualizar estado de la cita si existe CitaID
               if (CitaID) {
                 const sqlActualizarCita = `
                   UPDATE citas 
@@ -905,7 +806,6 @@ app.post("/api/ventas", (req, res) => {
                     });
                   }
 
-                  // 4️⃣ Confirmar la transacción
                   connection.commit((err) => {
                     if (err) {
                       return connection.rollback(() => {
@@ -922,7 +822,6 @@ app.post("/api/ventas", (req, res) => {
                   });
                 });
               } else {
-                // 🔹 Si no hay cita, confirmar transacción normalmente
                 connection.commit((err) => {
                   if (err) {
                     return connection.rollback(() => {
@@ -946,19 +845,8 @@ app.post("/api/ventas", (req, res) => {
   });
 });
 
-
-
-
-
-
-app.get("/", (req, res) => {
-  res.send("Servidor activo ✅");
-});
-
-// ======================================
-// 🔹 LISTAR VENTAS (con búsqueda y paginación)
-// ======================================
-/* app.get("/api/venta", (req, res) => {
+// Listar ventas
+app.get('/api/venta', (req, res) => {
   const { page = 1, limit = 8, search = "" } = req.query;
   const offset = (page - 1) * limit;
 
@@ -981,14 +869,12 @@ app.get("/", (req, res) => {
        OR v.FechaVenta LIKE ?
   `;
 
-  // 🔸 Primero, obtener las ventas
   pool.query(sqlVentas, [`%${search}%`, `%${search}%`, parseInt(limit), parseInt(offset)], (err, ventas) => {
     if (err) {
       console.error("❌ Error al obtener ventas:", err);
       return res.status(500).json({ error: "Error al obtener ventas" });
     }
 
-    // 🔸 Luego, obtener el total de registros
     pool.query(sqlTotal, [`%${search}%`, `%${search}%`], (err2, totalResult) => {
       if (err2) {
         console.error("❌ Error al contar ventas:", err2);
@@ -1003,184 +889,12 @@ app.get("/", (req, res) => {
       });
     });
   });
-}); */
-
-// Endpoint para lista de ventas (debería usar los mismos filtros)
-/* app.get('/api/venta', async (req, res) => {
-  try {
-    const { search, fechaInicio, fechaFin, page = 1, limit = 8 } = req.query;
-    
-    // MISMOS FILTROS que en estadísticas
-    let whereConditions = ["1=1"];
-    const params = [];
-
-    if (search && search.trim() !== '') {
-      whereConditions.push('(c.Nombre LIKE ? OR v.VentaID LIKE ?)');
-      params.push(`%${search}%`, `%${search}%`);
-    }
-
-    if (fechaInicio && fechaInicio.trim() !== '') {
-      whereConditions.push('DATE(v.FechaVenta) >= ?');
-      params.push(fechaInicio);
-    }
-
-    if (fechaFin && fechaFin.trim() !== '') {
-      whereConditions.push('DATE(v.FechaVenta) <= ?');
-      params.push(fechaFin);
-    }
-
-    const whereClause = whereConditions.join(' AND ');
-    
-    // Query para el total (paginación)
-    const countQuery = `
-      SELECT COUNT(*) as total 
-      FROM Venta v 
-      LEFT JOIN cliente c ON v.ClienteID = c.ClienteID 
-      WHERE ${whereClause}
-    `;
-    
-    // Query para los datos
-    const dataQuery = `
-      SELECT 
-        v.VentaID,
-        v.ClienteID,
-        CONCAT(c.Nombre, ' ', c.Apellido) AS ClienteNombre,
-        v.FechaVenta,
-        v.Total,
-        v.Estado,
-        v.Observaciones
-      FROM Venta v
-      LEFT JOIN cliente c ON v.ClienteID = c.ClienteID
-      WHERE ${whereClause}
-      ORDER BY v.FechaVenta DESC
-      LIMIT ? OFFSET ?
-    `;
-
-    const offset = (page - 1) * limit;
-    const dataParams = [...params, parseInt(limit), offset];
-
-    console.log('📋 Consulta ventas:', dataQuery);
-    console.log('📋 Parámetros ventas:', dataParams);
-
-    // Ejecutar ambas queries
-    const [countResult] = await db.execute(countQuery, params);
-    const [ventas] = await db.execute(dataQuery, dataParams);
-
-    const totalVentas = countResult[0].total;
-    const totalPaginas = Math.ceil(totalVentas / limit);
-
-    res.json({
-      ventas,
-      totalPaginas,
-      totalVentas
-    });
-
-  } catch (error) {
-    console.error('❌ Error al cargar ventas:', error);
-    res.status(500).json({ error: 'Error al cargar ventas: ' + error.message });
-  }
-}); */
-
-app.get('/api/venta', async (req, res) => {
-  try {
-    const { search, fechaInicio, fechaFin, page = 1, limit = 8 } = req.query;
-    
-    console.log('🎯 FILTROS RECIBIDOS:', { search, fechaInicio, fechaFin, page, limit });
-
-    let baseQuery = `
-      FROM Venta v 
-      LEFT JOIN cliente c ON v.ClienteID = c.ClienteID 
-    `;
-    
-    let whereConditions = [];
-    const params = [];
-
-    // Filtro de búsqueda
-    if (search && search.trim() !== '') {
-      whereConditions.push('(c.Nombre LIKE ? OR v.VentaID LIKE ?)');
-      params.push(`%${search}%`, `%${search}%`);
-    }
-
-    // Filtro de fecha inicio
-    if (fechaInicio && fechaInicio.trim() !== '') {
-      whereConditions.push('DATE(v.FechaVenta) >= ?');
-      params.push(fechaInicio);
-    }
-
-    // Filtro de fecha fin
-    if (fechaFin && fechaFin.trim() !== '') {
-      whereConditions.push('DATE(v.FechaVenta) <= ?');
-      params.push(fechaFin);
-    }
-
-    // Construir WHERE clause
-    let whereClause = '';
-    if (whereConditions.length > 0) {
-      whereClause = 'WHERE ' + whereConditions.join(' AND ');
-    }
-
-    // Query para contar total
-    const countQuery = `SELECT COUNT(*) as total ${baseQuery} ${whereClause}`;
-    console.log('🔢 COUNT QUERY:', countQuery);
-    console.log('🔢 COUNT PARAMS:', params);
-
-    // Query para datos
-    const dataQuery = `
-      SELECT 
-        v.VentaID,
-        v.ClienteID,
-        CONCAT(c.Nombre, ' ', c.Apellido) AS ClienteNombre,
-        v.FechaVenta,
-        v.Total,
-        v.Estado,
-        v.Observaciones
-      ${baseQuery}
-      ${whereClause}
-      ORDER BY v.FechaVenta DESC
-      LIMIT ? OFFSET ?
-    `;
-
-    const offset = (page - 1) * limit;
-    const dataParams = [...params, parseInt(limit), offset];
-
-    console.log('📋 DATA QUERY:', dataQuery);
-    console.log('📋 DATA PARAMS:', dataParams);
-
-    // Ejecutar queries
-    const [countResult] = await db.execute(countQuery, params);
-    const [ventas] = await db.execute(dataQuery, dataParams);
-
-    console.log('✅ RESULTADOS:', {
-      totalRegistros: countResult[0].total,
-      ventasEncontradas: ventas.length,
-      filtrosAplicados: whereConditions.length
-    });
-
-    const totalVentas = countResult[0].total;
-    const totalPaginas = Math.ceil(totalVentas / limit);
-
-    res.json({
-      ventas,
-      totalPaginas,
-      totalVentas
-    });
-
-  } catch (error) {
-    console.error('❌ Error en /api/venta:', error);
-    res.status(500).json({ 
-      error: 'Error al cargar ventas',
-      detalles: error.message 
-    });
-  }
 });
 
-
-
-
+// Obtener venta por ID
 app.get("/api/venta/:id", (req, res) => {
   const { id } = req.params;
 
-  // Obtener datos principales
   const sqlVenta = `
     SELECT 
       v.VentaID,
@@ -1207,7 +921,6 @@ app.get("/api/venta/:id", (req, res) => {
 
     const venta = ventaResult[0];
 
-    // Obtener detalles
     const sqlDetalles = `
       SELECT 
         d.DetalleID,
@@ -1226,7 +939,7 @@ app.get("/api/venta/:id", (req, res) => {
         console.error("❌ Error al obtener detalles:", err);
         return res.status(500).json({ error: "Error al obtener detalles" });
       }
-      // Obtener pagos
+
       const sqlPagos = `
         SELECT 
           vp.venta_pago_id,
@@ -1253,7 +966,7 @@ app.get("/api/venta/:id", (req, res) => {
   });
 });
 
-
+// Eliminar venta
 app.delete("/api/venta/:id", (req, res) => {
   const { id } = req.params;
 
@@ -1270,7 +983,6 @@ app.delete("/api/venta/:id", (req, res) => {
         return res.status(500).json({ error: "Error al iniciar transacción" });
       }
 
-      // Borrar pagos
       conn.query("DELETE FROM Venta_Tipo_Pago WHERE VentaID = ?", [id], (err) => {
         if (err) {
           return conn.rollback(() => {
@@ -1280,7 +992,6 @@ app.delete("/api/venta/:id", (req, res) => {
           });
         }
 
-        // Borrar detalles
         conn.query("DELETE FROM Venta_Detalle WHERE VentaID = ?", [id], (err) => {
           if (err) {
             return conn.rollback(() => {
@@ -1290,7 +1001,6 @@ app.delete("/api/venta/:id", (req, res) => {
             });
           }
 
-          // Borrar venta principal
           conn.query("DELETE FROM Venta WHERE VentaID = ?", [id], (err) => {
             if (err) {
               return conn.rollback(() => {
@@ -1319,14 +1029,7 @@ app.delete("/api/venta/:id", (req, res) => {
   });
 });
 
-
-
-
-
-
-
-
-// ✅ Obtener resumen de comisiones por empleado (con rango de fechas)
+// ✅ Obtener resumen de comisiones por empleado
 app.get("/api/comisiones", (req, res) => {
   const { fechaInicio, fechaFin } = req.query;
 
@@ -1364,8 +1067,7 @@ app.get("/api/comisiones", (req, res) => {
   });
 });
 
-
-// ✅ Obtener detalle de ventas de un empleado en rango de fechas
+// ✅ Obtener detalle de ventas de un empleado
 app.get("/api/comisiones/:empId", (req, res) => {
   const { empId } = req.params;
   const { fechaInicio, fechaFin } = req.query;
@@ -1398,13 +1100,6 @@ app.get("/api/comisiones/:empId", (req, res) => {
   });
 });
 
-
-
-
-
-
-
-
 // ============================================================
 // 📘 CRUD DE GASTOS
 // ============================================================
@@ -1412,7 +1107,7 @@ app.get("/api/comisiones/:empId", (req, res) => {
 // ✅ 1. Listar todos los gastos
 app.get("/api/gastos", (req, res) => {
   const sql = `
-    SELECT g.*, c.Nombre, CONCAT(e.nombre, ' ', e.apellido) usuario
+    SELECT g.*, c.nombre AS categoria_nombre, CONCAT(e.nombre, ' ', e.apellido) AS usuario_nombre
     FROM gastos g
     LEFT JOIN categoria_gasto c ON g.categoria_id = c.categoria_id
     LEFT JOIN usuario e ON g.usuario_id = e.usuario_id
@@ -1424,49 +1119,6 @@ app.get("/api/gastos", (req, res) => {
       return res.status(500).json({ error: "Error al obtener gastos" });
     }
     res.json(results);
-  });
-});
-
-// ✅ 2. Obtener un gasto específico por ID
-app.get("/api/gastos/:id", (req, res) => {
-  const { id } = req.params;
-  const sql = `
-    SELECT g.*, c.NombreCategoria
-    FROM gastos g
-    LEFT JOIN categoria_gasto c ON g.CategoriaID = c.CategoriaID
-    WHERE g.GastoID = ?
-  `;
-  pool.query(sql, [id], (err, results) => {
-    if (err) {
-      console.error("❌ Error al obtener gasto:", err);
-      return res.status(500).json({ error: "Error al obtener gasto" });
-    }
-    if (results.length === 0) {
-      return res.status(404).json({ error: "Gasto no encontrado" });
-    }
-    res.json(results[0]);
-  });
-});
-
-
-
-// ✅ 4. Modificar gasto existente
-app.put("/api/gastos/:id", (req, res) => {
-  const { id } = req.params;
-  const { Fecha, Descripcion, Monto, CategoriaID, TipoPago, Observacion } = req.body;
-
-  const sql = `
-    UPDATE gastos
-    SET Fecha = ?, Descripcion = ?, Monto = ?, CategoriaID = ?, TipoPago = ?, Observacion = ?
-    WHERE GastoID = ?
-  `;
-
-  pool.query(sql, [Fecha, Descripcion, Monto, CategoriaID, TipoPago, Observacion, id], (err) => {
-    if (err) {
-      console.error("❌ Error al modificar gasto:", err);
-      return res.status(500).json({ error: "Error al modificar gasto" });
-    }
-    res.json({ message: "✅ Gasto actualizado correctamente" });
   });
 });
 
@@ -1483,109 +1135,72 @@ app.delete("/api/gastos/:id", (req, res) => {
   });
 });
 
-
-
-
-// GET /api/venta/estadisticas
-// GET /api/venta/estadisticas
-// GET /api/venta/estadisticas - VERSIÓN SIMPLIFICADA
-app.get('/api/estadisticas/ventas', async (req, res) => {
-  try {
-    const { search, fechaInicio, fechaFin } = req.query;
-    
-    console.log('📊 Parámetros recibidos:', { search, fechaInicio, fechaFin });
-    
-    let query = `
-      SELECT 
-        COALESCE(SUM(Total), 0) as totalVentas,
-        COALESCE(COUNT(CASE WHEN Estado = 'Pagada' THEN 1 END), 0) as ventasPagadas,
-        COALESCE(COUNT(CASE WHEN Estado = 'Anulada' THEN 1 END), 0) as ventasAnuladas,
-        COALESCE(COUNT(*), 0) as totalRegistros
-      FROM venta 
-      WHERE 1=1
-    `;
-    
-    const params = [];
-    
-    if (search && search.trim() !== '') {
-      query += ' AND (ClienteID IN (SELECT ClienteID FROM cliente WHERE Nombre LIKE ?) OR VentaID LIKE ?)';
-      params.push(`%${search}%`, `%${search}%`);
-    }
-    
-    if (fechaInicio && fechaInicio.trim() !== '') {
-      query += ' AND DATE(FechaVenta) >= ?';
-      params.push(fechaInicio);
-    }
-    
-    if (fechaFin && fechaFin.trim() !== '') {
-      query += ' AND DATE(FechaVenta) <= ?';
-      params.push(fechaFin);
-    }
-    
-    console.log('📊 Consulta SQL:', query);
-    console.log('📊 Parámetros:', params);
-    
-    // CAMBIO AQUÍ: usar pool.query en lugar de db.execute
-    pool.query(query, params, (err, result) => {
-      if (err) {
-        console.error('❌ Error en consulta de estadísticas:', err);
-        return res.status(500).json({ 
-          error: 'Error al cargar estadísticas',
-          detalles: err.message 
-        });
-      }
-      
-      const estadisticas = {
-        totalVentas: parseFloat(result[0]?.totalVentas) || 0,
-        ventasPagadas: parseInt(result[0]?.ventasPagadas) || 0,
-        ventasAnuladas: parseInt(result[0]?.ventasAnuladas) || 0,
-        totalRegistros: parseInt(result[0]?.totalRegistros) || 0
-      };
-      
-      console.log('📊 Estadísticas calculadas:', estadisticas);
-      
-      res.json(estadisticas);
-    });
-    
-  } catch (error) {
-    console.error('❌ Error en estadísticas:', error);
-    res.status(500).json({ 
-      error: 'Error al cargar estadísticas',
-      detalles: error.message 
-    });
+// Estadísticas de ventas
+app.get('/api/estadisticas/ventas', (req, res) => {
+  const { search, fechaInicio, fechaFin } = req.query;
+  
+  console.log('📊 Parámetros recibidos:', { search, fechaInicio, fechaFin });
+  
+  let query = `
+    SELECT 
+      COALESCE(SUM(Total), 0) as totalVentas,
+      COALESCE(COUNT(CASE WHEN Estado = 'Pagada' THEN 1 END), 0) as ventasPagadas,
+      COALESCE(COUNT(CASE WHEN Estado = 'Anulada' THEN 1 END), 0) as ventasAnuladas,
+      COALESCE(COUNT(*), 0) as totalRegistros
+    FROM venta 
+    WHERE 1=1
+  `;
+  
+  const params = [];
+  
+  if (search && search.trim() !== '') {
+    query += ' AND (ClienteID IN (SELECT ClienteID FROM cliente WHERE Nombre LIKE ?) OR VentaID LIKE ?)';
+    params.push(`%${search}%`, `%${search}%`);
   }
+  
+  if (fechaInicio && fechaInicio.trim() !== '') {
+    query += ' AND DATE(FechaVenta) >= ?';
+    params.push(fechaInicio);
+  }
+  
+  if (fechaFin && fechaFin.trim() !== '') {
+    query += ' AND DATE(FechaVenta) <= ?';
+    params.push(fechaFin);
+  }
+  
+  console.log('📊 Consulta SQL:', query);
+  console.log('📊 Parámetros:', params);
+  
+  pool.query(query, params, (err, result) => {
+    if (err) {
+      console.error('❌ Error en consulta de estadísticas:', err);
+      return res.status(500).json({ 
+        error: 'Error al cargar estadísticas',
+        detalles: err.message 
+      });
+    }
+    
+    const estadisticas = {
+      totalVentas: parseFloat(result[0]?.totalVentas) || 0,
+      ventasPagadas: parseInt(result[0]?.ventasPagadas) || 0,
+      ventasAnuladas: parseInt(result[0]?.ventasAnuladas) || 0,
+      totalRegistros: parseInt(result[0]?.totalRegistros) || 0
+    };
+    
+    console.log('📊 Estadísticas calculadas:', estadisticas);
+    
+    res.json(estadisticas);
+  });
 });
-
-/* app.get('/api/venta/estadisticas', async (req, res) => {
-  try {
-    console.log('🔍 Headers recibidos:', req.headers);
-    console.log('🔍 URL completa:', req.url);
-    console.log('🔍 Query parameters:', req.query);
-    console.log('🔍 Método:', req.method);
-    
-    const { search, fechaInicio, fechaFin } = req.query;
-    
-    // Resto de tu código...
-    
-  } catch (error) {
-    console.error('❌ Error completo:', error);
-    res.status(500).json({ error: error.message });
-  }
-}); */
-
-
-
-
-// server.js - Agrega esto después de las importaciones y antes de las rutas
 
 // 🔐 MIDDLEWARE DE AUTENTICACIÓN
 const authenticateToken = (req, res, next) => {
-  // Excluir rutas públicas
   const publicRoutes = [
     '/api/auth/login',
     '/api/auth/create-admin', 
     '/api/auth/check-table',
     '/api/test',
+    '/health',
     '/'
   ];
   
@@ -1594,7 +1209,7 @@ const authenticateToken = (req, res, next) => {
   }
 
   const authHeader = req.headers['authorization'];
-  const token = authHeader && authHeader.split(' ')[1]; // Bearer TOKEN
+  const token = authHeader && authHeader.split(' ')[1];
 
   if (!token) {
     console.log('❌ Token no proporcionado para ruta:', req.path);
@@ -1604,7 +1219,7 @@ const authenticateToken = (req, res, next) => {
     });
   }
 
-  jwt.verify(token, 'secreto_golden_nails_2024', (err, user) => {
+  jwt.verify(token, process.env.JWT_SECRET || 'secreto_golden_nails_2024', (err, user) => {
     if (err) {
       console.log('❌ Token inválido:', err.message);
       return res.status(403).json({ 
@@ -1621,8 +1236,8 @@ const authenticateToken = (req, res, next) => {
 // 🔐 APLICAR MIDDLEWARE A TODAS LAS RUTAS DEL API
 app.use('/api', authenticateToken);
 
-// 🔄 RUTA PARA CAMBIAR CONTRASEÑA DESDE EL PERFIL
-app.post('/api/auth/cambiar-password', authenticateToken, async (req, res) => {
+// RUTAS DE PERFIL Y CAMBIO DE CONTRASEÑA
+app.post('/api/auth/cambiar-password', async (req, res) => {
   const { passwordActual, nuevoPassword } = req.body;
   const usuarioId = req.user.usuario_id;
 
@@ -1641,7 +1256,6 @@ app.post('/api/auth/cambiar-password', authenticateToken, async (req, res) => {
   }
 
   try {
-    // Primero verificar la contraseña actual
     const sqlVerificar = 'SELECT contrasena FROM usuario WHERE usuario_id = ?';
     
     pool.query(sqlVerificar, [usuarioId], async (err, results) => {
@@ -1661,8 +1275,6 @@ app.post('/api/auth/cambiar-password', authenticateToken, async (req, res) => {
       }
 
       const usuario = results[0];
-
-      // Verificar que la contraseña actual sea correcta
       const isPasswordValid = await bcryptjs.compare(passwordActual, usuario.contrasena);
       
       if (!isPasswordValid) {
@@ -1672,10 +1284,7 @@ app.post('/api/auth/cambiar-password', authenticateToken, async (req, res) => {
         });
       }
 
-      // Encriptar la nueva contraseña
       const hashedPassword = await bcryptjs.hash(nuevoPassword, 10);
-
-      // Actualizar la contraseña
       const sqlActualizar = 'UPDATE usuario SET contrasena = ? WHERE usuario_id = ?';
       
       pool.query(sqlActualizar, [hashedPassword, usuarioId], (err, results) => {
@@ -1713,7 +1322,7 @@ app.post('/api/auth/cambiar-password', authenticateToken, async (req, res) => {
 });
 
 // 🔄 RUTA PARA ACTUALIZAR PERFIL DE USUARIO
-app.put('/api/auth/perfil', authenticateToken, async (req, res) => {
+app.put('/api/auth/perfil', async (req, res) => {
   const { nombre, apellido, correo, telefono, direccion } = req.body;
   const usuarioId = req.user.usuario_id;
 
@@ -1735,7 +1344,6 @@ app.put('/api/auth/perfil', authenticateToken, async (req, res) => {
       if (err) {
         console.error('Error actualizando perfil:', err);
         
-        // Manejar error de duplicado de correo
         if (err.code === 'ER_DUP_ENTRY') {
           return res.status(400).json({ 
             success: false,
@@ -1756,7 +1364,6 @@ app.put('/api/auth/perfil', authenticateToken, async (req, res) => {
         });
       }
 
-      // Obtener los datos actualizados del usuario
       const sqlUsuario = 'SELECT usuario_id, nombre, apellido, usuario, correo, telefono, direccion, rol, estado FROM usuario WHERE usuario_id = ?';
       
       pool.query(sqlUsuario, [usuarioId], (err, userResults) => {
@@ -1790,7 +1397,7 @@ app.put('/api/auth/perfil', authenticateToken, async (req, res) => {
 });
 
 // 👤 RUTA PARA OBTENER DATOS DEL PERFIL
-app.get('/api/auth/perfil', authenticateToken, (req, res) => {
+app.get('/api/auth/perfil', (req, res) => {
   const usuarioId = req.user.usuario_id;
 
   const sql = 'SELECT usuario_id, nombre, apellido, usuario, correo, telefono, direccion, rol, estado FROM usuario WHERE usuario_id = ?';
@@ -1820,19 +1427,29 @@ app.get('/api/auth/perfil', authenticateToken, (req, res) => {
   });
 });
 
+// RUTA PRINCIPAL
+app.get("/", (req, res) => {
+  res.json({ 
+    message: "🚀 Backend Sistema Golden funcionando",
+    status: "online",
+    timestamp: new Date().toISOString()
+  });
+});
 
 // MANEJO DE RUTAS NO ENCONTRADAS
 app.use((req, res) => {
   res.status(404).json({ 
     success: false,
     error: 'Ruta no encontrada',
-    path: req.path
+    path: req.path,
+    method: req.method
   });
 });
 
-
 // 🔹 Configuración del puerto del servidor Express
-const PORT = 5000;
+const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
-  console.log(`🚀 Servidor corriendo en http://localhost:${PORT}`);
+  console.log(`🚀 Servidor corriendo en puerto ${PORT}`);
+  console.log(`📍 Health check: http://localhost:${PORT}/health`);
+  console.log(`📍 Environment: ${process.env.NODE_ENV || 'development'}`);
 });
