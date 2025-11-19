@@ -1,4 +1,4 @@
-// server.js - SOLUCIÓN DEFINITIVA CORS
+// server.js - SOLUCIÓN CORS DEFINITIVA
 const express = require('express');
 const mysql = require('mysql2/promise');
 const bcryptjs = require('bcryptjs');
@@ -6,9 +6,11 @@ const jwt = require('jsonwebtoken');
 
 const app = express();
 
-// ✅ MIDDLEWARE CORS MANUAL - IMPERATIVO
+// ✅ MIDDLEWARE CORS COMPLETO - IMPERATIVO
 app.use((req, res, next) => {
-  // Lista de orígenes permitidos
+  console.log(`📨 ${req.method} ${req.path} - Origin: ${req.headers.origin}`);
+  
+  // Orígenes permitidos
   const allowedOrigins = [
     'https://sistemagolden.up.railway.app',
     'http://localhost:3000',
@@ -17,30 +19,31 @@ app.use((req, res, next) => {
   
   const origin = req.headers.origin;
   
-  // Si el origen está en la lista, permitirlo
   if (allowedOrigins.includes(origin)) {
     res.setHeader('Access-Control-Allow-Origin', origin);
+  } else if (origin) {
+    console.log('🚫 Origen no permitido:', origin);
   }
   
-  // Headers esenciales para CORS
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept, Origin, Access-Control-Request-Method, Access-Control-Request-Headers');
   res.setHeader('Access-Control-Allow-Credentials', 'true');
-  res.setHeader('Access-Control-Max-Age', '86400'); // 24 horas
+  res.setHeader('Access-Control-Max-Age', '86400');
   
-  // ✅ MANEJO IMPERATIVO DE PREFLIGHT (OPTIONS)
+  // ✅ MANEJO IMPERATIVO DE PREFLIGHT REQUESTS
   if (req.method === 'OPTIONS') {
-    console.log('🔄 Preflight request recibida para:', req.path);
-    return res.status(200).end();
+    console.log('🔄 Preflight OPTIONS handled successfully');
+    return res.status(200).send();
   }
   
   next();
 });
 
-app.use(express.json());
+app.use(express.json({ limit: '10mb' }));
 
 // ✅ CONEXIÓN A BASE DE DATOS
 const createPool = () => {
+  console.log('🔗 Creating MySQL connection pool...');
   return mysql.createPool({
     host: process.env.MYSQLHOST || 'yamanote.proxy.rlwy.net',
     user: process.env.MYSQLUSER || 'root',
@@ -56,7 +59,7 @@ const createPool = () => {
 
 let pool;
 
-// ✅ HEALTH CHECK
+// ✅ HEALTH CHECK MEJORADO
 app.get('/health', async (req, res) => {
   try {
     if (!pool) pool = createPool();
@@ -64,27 +67,48 @@ app.get('/health', async (req, res) => {
     
     res.json({ 
       status: 'healthy',
-      database: 'connected', 
+      database: 'connected',
       cors: 'enabled',
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
+      environment: process.env.NODE_ENV || 'development'
     });
   } catch (error) {
     res.status(500).json({ 
       status: 'unhealthy',
       database: 'disconnected',
       error: error.message,
-      cors: 'enabled'
+      cors: 'enabled',
+      timestamp: new Date().toISOString()
     });
   }
 });
 
-// ✅ RUTA DE LOGIN CON CORS EXPLÍCITO
+// ✅ ENDPOINT DE TEST CORS ESPECÍFICO
+app.get('/api/cors-test', (req, res) => {
+  console.log('✅ CORS test endpoint called');
+  res.json({
+    success: true,
+    message: '✅ CORS está funcionando correctamente',
+    origin: req.headers.origin,
+    timestamp: new Date().toISOString(),
+    cors: 'enabled'
+  });
+});
+
+// ✅ OPTIONS HANDLER PARA CORS TEST
+app.options('/api/cors-test', (req, res) => {
+  console.log('🔄 CORS test preflight handled');
+  res.status(200).send();
+});
+
+// ✅ RUTA DE LOGIN MEJORADA
 app.post('/api/auth/login', async (req, res) => {
-  console.log('🔐 Login attempt received:', req.body);
+  console.log('🔐 Login attempt received for user:', req.body.usuario);
   
   try {
     const { usuario, contrasena } = req.body;
 
+    // Validación básica
     if (!usuario || !contrasena) {
       return res.status(400).json({ 
         success: false,
@@ -92,14 +116,17 @@ app.post('/api/auth/login', async (req, res) => {
       });
     }
 
+    // Inicializar pool si no existe
     if (!pool) pool = createPool();
 
+    // Buscar usuario
     const [users] = await pool.execute(
       'SELECT usuario_id, nombre, apellido, usuario, correo, contrasena, rol, estado FROM usuario WHERE usuario = ?', 
       [usuario]
     );
 
     if (users.length === 0) {
+      console.log('❌ Usuario no encontrado:', usuario);
       return res.status(401).json({ 
         success: false,
         error: 'Usuario o contraseña incorrectos' 
@@ -108,6 +135,7 @@ app.post('/api/auth/login', async (req, res) => {
 
     const user = users[0];
 
+    // Verificar estado
     if (user.estado !== 'activo') {
       return res.status(401).json({ 
         success: false,
@@ -115,15 +143,18 @@ app.post('/api/auth/login', async (req, res) => {
       });
     }
 
+    // Verificar contraseña
     const isPasswordValid = await bcryptjs.compare(contrasena, user.contrasena);
     
     if (!isPasswordValid) {
+      console.log('❌ Contraseña incorrecta para:', usuario);
       return res.status(401).json({ 
         success: false,
         error: 'Usuario o contraseña incorrectos' 
       });
     }
 
+    // Generar token
     const token = jwt.sign(
       { 
         usuario_id: user.usuario_id, 
@@ -134,6 +165,7 @@ app.post('/api/auth/login', async (req, res) => {
       { expiresIn: '24h' }
     );
 
+    // Datos de usuario sin contraseña
     const userData = {
       usuario_id: user.usuario_id,
       nombre: user.nombre,
@@ -146,6 +178,7 @@ app.post('/api/auth/login', async (req, res) => {
     
     console.log('✅ Login exitoso para:', user.usuario);
     
+    // Respuesta exitosa
     res.json({
       success: true,
       message: 'Login exitoso',
@@ -162,26 +195,33 @@ app.post('/api/auth/login', async (req, res) => {
   }
 });
 
-// ✅ ENDPOINT DE TEST CORS
-app.get('/api/cors-test', (req, res) => {
-  res.json({
+// ✅ OPTIONS HANDLER ESPECÍFICO PARA LOGIN
+app.options('/api/auth/login', (req, res) => {
+  console.log('🔄 Login preflight handled');
+  res.status(200).send();
+});
+
+// ✅ RUTA DE PRUEBA GENERAL
+app.get('/api/test', (req, res) => {
+  res.json({ 
     success: true,
-    message: '✅ CORS test exitoso',
-    origin: req.headers.origin,
+    message: '✅ Backend funcionando correctamente',
+    cors: 'enabled',
     timestamp: new Date().toISOString()
   });
 });
 
-// ✅ RUTA DE PRUEBA
-app.get('/api/test', (req, res) => {
-  res.json({ 
-    success: true,
-    message: 'Backend funcionando correctamente',
-    cors: 'enabled'
+// ✅ MANEJO DE ERRORES
+app.use((err, req, res, next) => {
+  console.error('❌ Error global:', err);
+  res.status(500).json({ 
+    success: false,
+    error: 'Error interno del servidor',
+    timestamp: new Date().toISOString()
   });
 });
 
-// ✅ MANEJO DE RUTAS NO ENCONTRADAS
+// ✅ RUTA NO ENCONTRADA
 app.use('*', (req, res) => {
   res.status(404).json({ 
     success: false,
@@ -195,15 +235,21 @@ const PORT = process.env.PORT || 5000;
 
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 Servidor corriendo en puerto ${PORT}`);
-  console.log(`📍 CORS habilitado para:`);
-  console.log(`   - https://sistemagolden.up.railway.app`);
-  console.log(`   - http://localhost:3000`);
-  console.log(`   - http://localhost:5173`);
+  console.log(`📍 Health Check: https://sistemagolden-backend-production.up.railway.app/health`);
+  console.log(`📍 CORS Test: https://sistemagolden-backend-production.up.railway.app/api/cors-test`);
+  console.log(`📍 Frontend: https://sistemagolden.up.railway.app`);
+  console.log('✅ CORS configurado para:');
+  console.log('   - https://sistemagolden.up.railway.app');
+  console.log('   - http://localhost:3000');
+  console.log('   - http://localhost:5173');
 });
 
-// Manejo de cierre graceful
+// Manejo graceful de shutdown
 process.on('SIGTERM', async () => {
-  console.log('🔄 Cerrando servidor...');
-  if (pool) await pool.end();
+  console.log('🔄 Cerrando servidor gracefulmente...');
+  if (pool) {
+    await pool.end();
+    console.log('✅ Conexión a BD cerrada');
+  }
   process.exit(0);
 });
