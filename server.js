@@ -50,7 +50,7 @@ pool.getConnection((err) => {
 // 🔹 CONEXIÓN PARA PRODUCCIÓN (Railway) - REEMPLAZA TU CÓDIGO ACTUAL
 
 // ✅ MIDDLEWARES ESENCIALES
-app.use(cors({
+/* app.use(cors({
   origin: process.env.FRONTEND_URL || "http://localhost:3000",
   credentials: true
 }));
@@ -68,7 +68,7 @@ const pool = mysql.createPool({
   connectionLimit: 10,
   queueLimit: 0,
   ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
-});
+}); */
 
 /* // Agrega esta ruta para diagnosticar
 app.get('/debug', (req, res) => {
@@ -85,7 +85,7 @@ app.get('/debug', (req, res) => {
   });
 }); */
 
-// Agregar esta ruta para debug
+/* // Agregar esta ruta para debug
 app.get('/health', (req, res) => {
   res.json({
     status: 'Server running',
@@ -306,8 +306,72 @@ app.get('/api/test', (req, res) => {
     message: 'Servidor funcionando correctamente',
     timestamp: new Date().toISOString()
   });
+}); */
+
+// ✅ CONEXIÓN SIMPLIFICADA
+const pool = mysql.createPool({
+  host: process.env.MYSQLHOST,
+  user: process.env.MYSQLUSER,
+  password: process.env.MYSQLPASSWORD,
+  database: process.env.MYSQLDATABASE,
+  port: process.env.MYSQLPORT,
+  ssl: { rejectUnauthorized: false }
 });
 
+// ✅ HEALTH CHECK
+app.get('/health', (req, res) => {
+  res.json({ 
+    status: 'OK', 
+    message: 'Backend funcionando',
+    timestamp: new Date().toISOString()
+  });
+});
+
+// ✅ LOGIN SIMPLIFICADO PARA TESTING
+app.post('/api/auth/login', (req, res) => {
+  console.log('📧 Login attempt received:', req.body);
+  
+  const { usuario, contrasena } = req.body;
+
+  // Validación básica
+  if (!usuario || !contrasena) {
+    return res.status(400).json({ 
+      success: false,
+      error: 'Usuario y contraseña son requeridos' 
+    });
+  }
+
+  // Para testing - acepta cualquier usuario/contraseña
+  if (usuario && contrasena) {
+    return res.json({
+      success: true,
+      message: 'Login exitoso (modo testing)',
+      token: 'token-test-' + Date.now(),
+      user: {
+        id: 1,
+        nombre: 'Usuario Test',
+        usuario: usuario,
+        rol: 'admin'
+      }
+    });
+  }
+});
+
+// ✅ TEST ENDPOINT
+app.get('/api/auth/test', (req, res) => {
+  res.json({ 
+    message: 'GET funciona correctamente',
+    method: 'GET'
+  });
+});
+
+app.post('/api/auth/test', (req, res) => {
+  res.json({ 
+    message: 'POST funciona correctamente',
+    method: 'POST',
+    body: req.body
+  });
+});
 
 
 
