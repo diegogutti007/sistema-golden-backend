@@ -1,13 +1,14 @@
 {
   "name": "server",
   "version": "1.0.0",
-  "description": "",
+  "description": "Backend para Golden Nails",
   "main": "server.js",
   "scripts": {
-    "build": "CI=false react-scripts build",
+    "start": "node server.js",
+    "dev": "nodemon server.js",
     "build:safe": "DISABLE_ESLINT_PLUGIN=true react-scripts build"
   },
-  "author": "",
+  "author": "Golden Nails",
   "license": "ISC",
   "dependencies": {
     "bcryptjs": "^3.0.3",
@@ -16,5 +17,9 @@
     "express": "^5.1.0",
     "jsonwebtoken": "^9.0.2",
     "mysql2": "^3.15.3"
-  }
+  },
+    "engines": {
+    "node": "18.x"
+  },  
+  "keywords": ["backend", "api", "nodejs"]
 }
