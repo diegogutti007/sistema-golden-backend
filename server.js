@@ -7,11 +7,20 @@ const cors = require('cors');
 
 const app = express();
 
-// ✅ MIDDLEWARES ESENCIALES
+// ✅ CONFIGURACIÓN CORS MEJORADA - PERMITE TU FRONTEND EN VERCEL
 app.use(cors({
-  origin: process.env.FRONTEND_URL || "http://localhost:3000",
-  credentials: true
+  origin: [
+    "https://sistemagolden.up.railway.app", // Tu frontend en Vercel
+    "http://localhost:3000",
+    "http://localhost:5173"
+  ],
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
 }));
+
+// ✅ MANEJAR PREFLIGHT REQUESTS
+app.options('*', cors());
 
 app.use(express.json());
 
