@@ -1,4 +1,4 @@
-// server.js - SOLUCIÓN CORS DEFINITIVA
+// server.js - VERSIÓN CORREGIDA
 const express = require('express');
 const mysql = require('mysql2/promise');
 const bcryptjs = require('bcryptjs');
@@ -10,17 +10,18 @@ const app = express();
 app.use((req, res, next) => {
   console.log(`📨 ${req.method} ${req.path} - Origin: ${req.headers.origin}`);
   
-  // Orígenes permitidos
+  // Orígenes permitidos - CORREGIDO
   const allowedOrigins = [
-    'https://sistemagolden.up.railway.app'//,
-    //'http://localhost:3000',
-    //'http://localhost:5173'
+    'https://sistemagolden.up.railway.app',
+    'http://localhost:3000',
+    'http://localhost:5173'
   ];
   
   const origin = req.headers.origin;
   
   if (allowedOrigins.includes(origin)) {
     res.setHeader('Access-Control-Allow-Origin', origin);
+    console.log(`✅ CORS permitido para: ${origin}`);
   } else if (origin) {
     console.log('🚫 Origen no permitido:', origin);
   }
@@ -41,33 +42,63 @@ app.use((req, res, next) => {
 
 app.use(express.json({ limit: '10mb' }));
 
-// ✅ CONEXIÓN A BASE DE DATOS
+// ✅ CONEXIÓN A BASE DE DATOS CON MANEJO DE ERRORES
 const createPool = () => {
   console.log('🔗 Creating MySQL connection pool...');
-  return mysql.createPool({
-    host: process.env.MYSQLHOST || 'yamanote.proxy.rlwy.net',
-    user: process.env.MYSQLUSER || 'root',
-    password: process.env.MYSQLPASSWORD || 'mysql',
-    database: process.env.MYSQLDATABASE || 'proyecto_golden',
-    port: process.env.MYSQLPORT || 22744,
-    waitForConnections: true,
-    connectionLimit: 10,
-    queueLimit: 0,
-    ssl: process.env.MYSQLHOST ? { rejectUnauthorized: false } : false
-  });
+  try {
+    const pool = mysql.createPool({
+      host: process.env.MYSQLHOST || 'yamanote.proxy.rlwy.net',
+      user: process.env.MYSQLUSER || 'root',
+      password: process.env.MYSQLPASSWORD || 'mysql',
+      database: process.env.MYSQLDATABASE || 'proyecto_golden',
+      port: process.env.MYSQLPORT || 22744,
+      waitForConnections: true,
+      connectionLimit: 10,
+      queueLimit: 0,
+      ssl: process.env.MYSQLHOST ? { rejectUnauthorized: false } : false
+    });
+    console.log('✅ Pool de MySQL creado exitosamente');
+    return pool;
+  } catch (error) {
+    console.error('❌ Error creando pool de MySQL:', error);
+    return null;
+  }
 };
 
 let pool;
 
+// ✅ INICIALIZAR BASE DE DATOS AL INICIO
+const initializeDatabase = async () => {
+  try {
+    pool = createPool();
+    if (pool) {
+      await pool.execute('SELECT 1');
+      console.log('✅ Conexión a MySQL verificada');
+      return true;
+    }
+    return false;
+  } catch (error) {
+    console.error('❌ Error conectando a MySQL:', error.message);
+    return false;
+  }
+};
+
 // ✅ HEALTH CHECK MEJORADO
 app.get('/health', async (req, res) => {
   try {
-    if (!pool) pool = createPool();
-    const [rows] = await pool.execute('SELECT 1 as test');
+    let dbStatus = 'disconnected';
+    if (pool) {
+      try {
+        await pool.execute('SELECT 1');
+        dbStatus = 'connected';
+      } catch (dbError) {
+        dbStatus = 'error';
+      }
+    }
     
     res.json({ 
       status: 'healthy',
-      database: 'connected',
+      database: dbStatus,
       cors: 'enabled',
       timestamp: new Date().toISOString(),
       environment: process.env.NODE_ENV || 'development'
@@ -75,12 +106,21 @@ app.get('/health', async (req, res) => {
   } catch (error) {
     res.status(500).json({ 
       status: 'unhealthy',
-      database: 'disconnected',
+      database: 'unknown',
       error: error.message,
       cors: 'enabled',
       timestamp: new Date().toISOString()
     });
   }
+});
+
+// ✅ RUTA RAIZ - IMPORTANTE
+app.get('/', (req, res) => {
+  res.json({ 
+    message: '🚀 Backend Sistema Golden funcionando',
+    status: 'online',
+    timestamp: new Date().toISOString()
+  });
 });
 
 // ✅ ENDPOINT DE TEST CORS ESPECÍFICO
@@ -117,7 +157,15 @@ app.post('/api/auth/login', async (req, res) => {
     }
 
     // Inicializar pool si no existe
-    if (!pool) pool = createPool();
+    if (!pool) {
+      const dbConnected = await initializeDatabase();
+      if (!dbConnected) {
+        return res.status(503).json({ 
+          success: false,
+          error: 'Servicio de base de datos no disponible' 
+        });
+      }
+    }
 
     // Buscar usuario
     const [users] = await pool.execute(
@@ -230,19 +278,28 @@ app.use('*', (req, res) => {
   });
 });
 
-// ✅ INICIAR SERVIDOR
-const PORT = process.env.PORT || 5000;
-
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`🚀 Servidor corriendo en puerto ${PORT}`);
-  console.log(`📍 Health Check: https://sistemagolden-backend-production.up.railway.app/health`);
-  console.log(`📍 CORS Test: https://sistemagolden-backend-production.up.railway.app/api/cors-test`);
-  console.log(`📍 Frontend: https://sistemagolden.up.railway.app`);
-  console.log('✅ CORS configurado para:');
-  console.log('   - https://sistemagolden.up.railway.app');
-  console.log('   - http://localhost:3000');
-  console.log('   - http://localhost:5173');
-});
+// ✅ INICIAR SERVIDOR CON INICIALIZACIÓN
+const startServer = async () => {
+  try {
+    // Inicializar base de datos
+    await initializeDatabase();
+    
+    const PORT = process.env.PORT || 5000;
+    app.listen(PORT, '0.0.0.0', () => {
+      console.log(`🚀 Servidor corriendo en puerto ${PORT}`);
+      console.log(`📍 Health Check: /health`);
+      console.log(`📍 Ruta raíz: /`);
+      console.log('✅ CORS configurado para:');
+      console.log('   - https://sistemagolden.up.railway.app');
+      console.log('   - http://localhost:3000');
+      console.log('   - http://localhost:5173');
+    });
+    
+  } catch (error) {
+    console.error('❌ Error iniciando servidor:', error);
+    process.exit(1);
+  }
+};
 
 // Manejo graceful de shutdown
 process.on('SIGTERM', async () => {
@@ -253,3 +310,6 @@ process.on('SIGTERM', async () => {
   }
   process.exit(0);
 });
+
+// ✅ INICIAR LA APLICACIÓN
+startServer();
