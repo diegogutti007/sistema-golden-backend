@@ -574,7 +574,7 @@ app.post('/api/clientes', (req, res) => {
 });
 
 ///////////////////Gastos/////////////////////////////////////////////////////////////
-app.post("/api/gastos", (req, res) => {
+/* app.post("/api/gastos", (req, res) => {
   const { descripcion, monto, categoria_id, periodo_id, fecha_gasto, observaciones, EmpId, pagos } = req.body;
 
   if (!descripcion || !monto || !categoria_id || !periodo_id) {
@@ -677,7 +677,7 @@ app.post("/api/gastos", (req, res) => {
       );
     });
   });
-});
+}); */
 
 
 // ✅ Obtener categorias
