@@ -1,53 +1,13 @@
-// server.js
 const express = require('express');
 const cors = require('cors');
 const mysql = require('mysql2');
-//const mysql = require("mysql2/promise");
 const router = express.Router();
-//import gastosRoutes from "./routes/gastos.js";
 const bcryptjs = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 
 const app = express();
 app.use(cors());
 app.use(express.json());
-
-
-/* app.use(cors({
-  origin: "https://goldennails.vercel.app",
-  credentials: true
-}));
-
-//app.use("/api/gastos", gastosRoutes);
-
-// 🔹 Configuración de la base de datos y servidor en el mismo archivo
-const pool = mysql.createPool({
-  host: 'localhost',
-  user: 'root',
-  password: 'mysql',
-  database: 'proyecto_golden',
-  port: 3306, // Puerto de MySQL (no confundir con el del servidor Express)
-  waitForConnections: true,
-  connectionLimit: 10,
-  queueLimit: 0,
-});
-
-// Verificar conexión al iniciar
-pool.getConnection((err) => {
-  if (err) {
-    console.error('❌ Error de conexión a la base de datos: ', err);
-    process.exit(1);
-  } else {
-    console.log('✅ Conectado a la base de datos');
-  }
-}); */
-
-/* app.use(cors({
-  origin: "https://goldennails.vercel.app",
-  credentials: true
-})); */
-
-//app.use("/api/gastos", gastosRoutes);
 
 // 🔹 CONEXIÓN PARA PRODUCCIÓN (Railway) - REEMPLAZA TU CÓDIGO ACTUAL
 const pool = mysql.createPool({
@@ -97,9 +57,6 @@ app.get('/debug', (req, res) => {
     allEnvVars: process.env
   });
 });
-
-
-
 
 
 // Verificar conexión
@@ -317,7 +274,7 @@ app.get('/api/tipo-empleado', (req, res) => {
 
 // 🔹 Combobox tipo_empleado
 app.get('/api/cargo-empleado', (req, res) => {
-  pool.query('SELECT * FROM Cargo_Empleado', (err, results) => {
+  pool.query('SELECT * FROM cargo_empleado', (err, results) => {
     if (err) {
       console.error('❌ Error en la consulta:', err);
       return res.status(500).json({ error: 'Error en la consulta' });
@@ -354,9 +311,9 @@ app.get('/api/listaempleado', (req, res) => {
          SELECT e.EmpId, e.Nombres, e.Apellidos, e.DocID, 
            e.Direccion, e.FechaNacimiento, e.Sueldo, e.fecha_ingreso, e.fecha_renuncia, t.Tipo_EmpId,
            t.Descripcion AS TipoEmpleado, t.Comision, c.Cargo_EmpId, c.Descripcion
-    FROM Empleado e
+    FROM empleado e
     JOIN tipo_empleado t ON e.Tipo_EmpId = t.Tipo_EmpId
-    JOIN Cargo_Empleado c ON e.Cargo_EmpId = c.Cargo_EmpId
+    JOIN cargo_empleado c ON e.Cargo_EmpId = c.Cargo_EmpId
     ORDER BY e.fecha_ingreso;
   `;
 
@@ -395,7 +352,7 @@ app.put('/api/empleado/:id', (req, res) => {
   }
 
   const query = `
-    UPDATE Empleado 
+    UPDATE empleado 
     SET 
       Nombres = ?, 
       Apellidos = ?, 
@@ -470,7 +427,7 @@ app.get('/api/citas', (req, res) => {
         SELECT c.*, CONCAT(p.nombre, ' ', p.apellido) AS ClienteNombre, CONCAT(e.nombres, ' ', e.apellidos) AS EmpleadoNombre
     FROM citas c
     LEFT JOIN cliente p ON c.ClienteID = p.ClienteID
-    LEFT JOIN Empleado e ON c.EmpId = e.EmpId
+    LEFT JOIN empleado e ON c.EmpId = e.EmpId
     ORDER BY c.FechaInicio;
   `;
   pool.query(query, (err, results) => {
@@ -781,7 +738,7 @@ app.get("/api/clientes", (req, res) => {
 
 // 🔹 Obtener todos los artículos
 app.get("/api/articulos", (req, res) => {
-  pool.query("SELECT * FROM Articulo", (err, results) => {
+  pool.query("SELECT * FROM articulo", (err, results) => {
     if (err) return res.status(500).json({ error: err });
     res.json(results);
   });
@@ -1069,7 +1026,7 @@ app.get('/api/venta', async (req, res) => {
     console.log('🎯 FILTROS RECIBIDOS:', { search, fechaInicio, fechaFin, page, limit });
 
     let baseQuery = `
-      FROM Venta v 
+      FROM venta v 
       LEFT JOIN cliente c ON v.ClienteID = c.ClienteID 
     `;
     
@@ -1171,7 +1128,7 @@ app.get("/api/venta/:id", (req, res) => {
       v.Total,
       v.Estado,
       v.Observaciones
-    FROM Venta v
+    FROM venta v
     LEFT JOIN cliente c ON v.ClienteID = c.ClienteID
     WHERE v.VentaID = ?
   `;
@@ -1197,8 +1154,8 @@ app.get("/api/venta/:id", (req, res) => {
         d.Cantidad,
         d.PrecioUnitario,
         (d.Cantidad * d.PrecioUnitario) AS Importe
-      FROM Venta_Detalle d
-      JOIN Articulo a ON d.ArticuloID = a.ArticuloID
+      FROM venta_detalle d
+      JOIN articulo a ON d.ArticuloID = a.ArticuloID
       WHERE d.VentaID = ?
     `;
 
@@ -1213,7 +1170,7 @@ app.get("/api/venta/:id", (req, res) => {
           vp.venta_pago_id,
           tp.nombre AS TipoPago,
           vp.monto
-        FROM Venta_Tipo_Pago vp
+        FROM venta_tipo_pago vp
         JOIN tipo_pago tp ON vp.tipo_pago_id = tp.tipo_pago_id
         WHERE vp.VentaID = ?
       `;
@@ -1252,7 +1209,7 @@ app.delete("/api/venta/:id", (req, res) => {
       }
 
       // Borrar pagos
-      conn.query("DELETE FROM Venta_Tipo_Pago WHERE VentaID = ?", [id], (err) => {
+      conn.query("DELETE FROM venta_tipo_pago WHERE VentaID = ?", [id], (err) => {
         if (err) {
           return conn.rollback(() => {
             conn.release();
@@ -1262,7 +1219,7 @@ app.delete("/api/venta/:id", (req, res) => {
         }
 
         // Borrar detalles
-        conn.query("DELETE FROM Venta_Detalle WHERE VentaID = ?", [id], (err) => {
+        conn.query("DELETE FROM venta_detalle WHERE VentaID = ?", [id], (err) => {
           if (err) {
             return conn.rollback(() => {
               conn.release();
@@ -1272,7 +1229,7 @@ app.delete("/api/venta/:id", (req, res) => {
           }
 
           // Borrar venta principal
-          conn.query("DELETE FROM Venta WHERE VentaID = ?", [id], (err) => {
+          conn.query("DELETE FROM venta WHERE VentaID = ?", [id], (err) => {
             if (err) {
               return conn.rollback(() => {
                 conn.release();
@@ -1325,11 +1282,11 @@ app.get("/api/comisiones", (req, res) => {
       IFNULL(SUM(vd.Importe), 0) AS TotalVentas,
       ROUND((IFNULL(SUM(vd.Importe), 0) * (te.Comision / 100)), 2) AS TotalComision,
       v.FechaVenta
-    FROM Empleado e
-    LEFT JOIN Tipo_Empleado te ON e.Tipo_EmpId = te.Tipo_EmpId
-    LEFT JOIN Cargo_Empleado ce ON e.Cargo_EmpId = ce.Cargo_EmpId
-    LEFT JOIN Venta_Detalle vd ON e.EmpId = vd.EmpId
-    LEFT JOIN Venta v ON vd.VentaID = v.VentaID
+    FROM empleado e
+    LEFT JOIN tipo_empleado te ON e.Tipo_EmpId = te.Tipo_EmpId
+    LEFT JOIN cargo_empleado ce ON e.Cargo_EmpId = ce.Cargo_EmpId
+    LEFT JOIN venta_detalle vd ON e.EmpId = vd.EmpId
+    LEFT JOIN venta v ON vd.VentaID = v.VentaID
     WHERE v.FechaVenta BETWEEN ? AND ?
     GROUP BY e.EmpId, e.Nombres, e.Apellidos, ce.Descripcion, te.Descripcion, 
     te.Comision, v.FechaVenta
@@ -1363,9 +1320,9 @@ app.get("/api/comisiones/:empId", (req, res) => {
       vd.Cantidad,
       vd.PrecioUnitario,
       vd.Importe
-    FROM Venta_Detalle vd
-    INNER JOIN Venta v ON vd.VentaID = v.VentaID
-    INNER JOIN Articulo a ON vd.ArticuloID = a.ArticuloID
+    FROM venta_detalle vd
+    INNER JOIN venta v ON vd.VentaID = v.VentaID
+    INNER JOIN articulo a ON vd.ArticuloID = a.ArticuloID
     WHERE vd.EmpId = ? AND v.FechaVenta BETWEEN ? AND ?
     ORDER BY v.FechaVenta DESC;
   `;
