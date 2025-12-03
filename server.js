@@ -7,15 +7,7 @@ const jwt = require('jsonwebtoken');
 
 const app = express();
 
-/* app.use(cors()); */
-app.use(cors({
-  origin: [
-    'https://tu-frontend.railway.app',
-    'http://localhost:3000',
-    'http://localhost:5000'
-  ],
-  credentials: true
-}));
+app.use(cors()); 
 
 app.use(express.json());
 
