@@ -7,7 +7,7 @@ const jwt = require('jsonwebtoken');
 
 const app = express();
 
-app.use(cors()); 
+app.use(cors());
 
 app.use(express.json());
 
@@ -84,55 +84,55 @@ app.post('/api/auth/login', (req, res) => {
   const { usuario, contrasena } = req.body;
 
   if (!usuario || !contrasena) {
-    return res.status(400).json({ 
+    return res.status(400).json({
       success: false,
-      error: 'Usuario y contraseña son requeridos' 
+      error: 'Usuario y contraseña son requeridos'
     });
   }
 
   const sql = 'SELECT usuario_id, nombre, apellido, usuario, correo, contrasena, rol, estado FROM usuario WHERE usuario = ?';
-  
+
   pool.query(sql, [usuario], async (err, results) => {
     if (err) {
       console.error('Error en consulta SQL:', err);
-      return res.status(500).json({ 
+      return res.status(500).json({
         success: false,
-        error: 'Error en la base de datos' 
+        error: 'Error en la base de datos'
       });
     }
 
     if (results.length === 0) {
-      return res.status(401).json({ 
+      return res.status(401).json({
         success: false,
-        error: 'Usuario o contraseña incorrectos' 
+        error: 'Usuario o contraseña incorrectos'
       });
     }
 
     const user = results[0];
 
     if (user.estado !== 'activo') {
-      return res.status(401).json({ 
+      return res.status(401).json({
         success: false,
-        error: 'Usuario inactivo' 
+        error: 'Usuario inactivo'
       });
     }
 
     try {
       // ✅ CORREGIDO: usar bcryptjs en lugar de bcrypt
       const isPasswordValid = await bcryptjs.compare(contrasena, user.contrasena);
-      
+
       if (!isPasswordValid) {
-        return res.status(401).json({ 
+        return res.status(401).json({
           success: false,
-          error: 'Usuario o contraseña incorrectos' 
+          error: 'Usuario o contraseña incorrectos'
         });
       }
 
       const token = jwt.sign(
-        { 
-          usuario_id: user.usuario_id, 
+        {
+          usuario_id: user.usuario_id,
           usuario: user.usuario,
-          rol: user.rol 
+          rol: user.rol
         },
         'secreto_golden_nails_2024',
         { expiresIn: '24h' }
@@ -147,9 +147,9 @@ app.post('/api/auth/login', (req, res) => {
         rol: user.rol,
         estado: user.estado
       };
-      
+
       console.log('✅ Login exitoso para:', user.usuario);
-      
+
       res.json({
         success: true,
         message: 'Login exitoso',
@@ -159,9 +159,9 @@ app.post('/api/auth/login', (req, res) => {
 
     } catch (error) {
       console.error('Error en bcryptjs:', error);
-      res.status(500).json({ 
+      res.status(500).json({
         success: false,
-        error: 'Error interno del servidor' 
+        error: 'Error interno del servidor'
       });
     }
   });
@@ -170,14 +170,14 @@ app.post('/api/auth/login', (req, res) => {
 // 👑 CREAR USUARIO ADMIN
 app.post('/api/auth/create-admin', async (req, res) => {
   const password = 'admin123';
-  
+
   try {
     // ✅ CORREGIDO: usar bcryptjs
     const hashedPassword = await bcryptjs.hash(password, 10);
 
     const sql = `INSERT INTO usuario (nombre, apellido, usuario, correo, contrasena, rol, estado) 
                  VALUES (?, ?, ?, ?, ?, 'admin', 'activo')`;
-    
+
     pool.query(sql, ['Administrador', 'Sistema', 'admin', 'admin@goldennails.com', hashedPassword], (err, result) => {
       if (err) {
         if (err.code === 'ER_DUP_ENTRY') {
@@ -187,9 +187,9 @@ app.post('/api/auth/create-admin', async (req, res) => {
           });
         }
         console.error('Error creando admin:', err);
-        return res.status(500).json({ 
+        return res.status(500).json({
           success: false,
-          error: 'Error creando usuario admin' 
+          error: 'Error creando usuario admin'
         });
       }
 
@@ -202,12 +202,12 @@ app.post('/api/auth/create-admin', async (req, res) => {
         }
       });
     });
-    
+
   } catch (error) {
     console.error('Error hasheando contraseña:', error);
-    res.status(500).json({ 
+    res.status(500).json({
       success: false,
-      error: 'Error creando usuario admin' 
+      error: 'Error creando usuario admin'
     });
   }
 });
@@ -215,14 +215,14 @@ app.post('/api/auth/create-admin', async (req, res) => {
 // 🔍 VERIFICAR TABLA
 app.get('/api/auth/check-table', (req, res) => {
   const sql = "SHOW TABLES LIKE 'usuario'";
-  
+
   pool.query(sql, (err, results) => {
     if (err) {
       console.error('Error verificando tabla:', err);
       return res.status(500).json({ error: 'Error en base de datos' });
     }
-    
-    res.json({ 
+
+    res.json({
       tableExists: results.length > 0
     });
   });
@@ -231,20 +231,20 @@ app.get('/api/auth/check-table', (req, res) => {
 // 👥 VER USUARIOS
 app.get('/api/auth/users', (req, res) => {
   const sql = 'SELECT usuario_id, nombre, usuario, correo, rol, estado FROM usuario';
-  
+
   pool.query(sql, (err, results) => {
     if (err) {
       console.error('Error obteniendo usuarios:', err);
       return res.status(500).json({ error: 'Error en base de datos' });
     }
-    
+
     res.json({ users: results });
   });
 });
 
 // 🧪 RUTA DE PRUEBA
 app.get('/api/test', (req, res) => {
-  res.json({ 
+  res.json({
     success: true,
     message: 'Servidor funcionando correctamente',
     timestamp: new Date().toISOString()
@@ -347,9 +347,9 @@ app.put('/api/empleado/:id', (req, res) => {
   } = req.body;
 
   // Validar campos requeridos
-  if (!nombres || !apellidos || !docId || !tipo_EmpId || !fechaNacimiento || !fechaIngreso || !sueldo || !cargo_EmpId ) {
-    return res.status(400).json({ 
-      error: "Todos los campos excepto fecha_renuncia son requeridos" 
+  if (!nombres || !apellidos || !docId || !tipo_EmpId || !fechaNacimiento || !fechaIngreso || !sueldo || !cargo_EmpId) {
+    return res.status(400).json({
+      error: "Todos los campos excepto fecha_renuncia son requeridos"
     });
   }
 
@@ -386,20 +386,20 @@ app.put('/api/empleado/:id', (req, res) => {
   pool.query(query, values, (err, results) => {
     if (err) {
       console.error("❌ Error al actualizar empleado:", err);
-      return res.status(500).json({ 
+      return res.status(500).json({
         error: "Error al actualizar empleado",
-        detalle: err.message 
+        detalle: err.message
       });
     }
 
     if (results.affectedRows === 0) {
-      return res.status(404).json({ 
-        error: "Empleado no encontrado" 
+      return res.status(404).json({
+        error: "Empleado no encontrado"
       });
     }
 
     console.log("✅ Empleado actualizado correctamente, ID:", empleadoId);
-    res.json({ 
+    res.json({
       mensaje: "Empleado actualizado correctamente",
       empleadoId: empleadoId,
       affectedRows: results.affectedRows
@@ -574,7 +574,7 @@ app.post('/api/clientes', (req, res) => {
 });
 
 ///////////////////Gastos/////////////////////////////////////////////////////////////
-/* app.post("/api/gastos", (req, res) => {
+app.post("/api/gastos", (req, res) => {
   const { descripcion, monto, categoria_id, periodo_id, fecha_gasto, observaciones, EmpId, pagos } = req.body;
 
   if (!descripcion || !monto || !categoria_id || !periodo_id) {
@@ -677,7 +677,212 @@ app.post('/api/clientes', (req, res) => {
       );
     });
   });
+});
+
+
+
+app.put("/api/gastos/:id", (req, res) => {
+  const gastoId = req.params.id;
+  const { descripcion, monto, categoria_id, periodo_id, fecha_gasto, observaciones, EmpId, pagos } = req.body;
+
+  // Validaciones
+  if (!gastoId) {
+    return res.status(400).json({ success: false, message: "ID de gasto requerido" });
+  }
+
+  if (!descripcion || !monto || !categoria_id || !periodo_id) {
+    return res.status(400).json({ success: false, message: "Faltan campos obligatorios" });
+  }
+
+  if (!Array.isArray(pagos) || pagos.length === 0) {
+    return res.status(400).json({ success: false, message: "Debe incluir al menos un tipo de pago" });
+  }
+
+  const sumaPagos = pagos.reduce((sum, p) => sum + Number(p.monto || 0), 0);
+  if (Math.abs(sumaPagos - Number(monto)) > 0.01) {
+    return res.status(400).json({
+      success: false,
+      message: "La suma de los montos por tipo de pago no coincide con el monto total",
+    });
+  }
+
+  // 🔹 Iniciar conexión y transacción
+  pool.getConnection((err, conn) => {
+    if (err) {
+      console.error("❌ Error obteniendo conexión:", err);
+      return res.status(500).json({ success: false, message: "Error de conexión a la base de datos" });
+    }
+
+    // Primero verificar si el gasto existe
+    const checkQuery = "SELECT gasto_id FROM gastos WHERE gasto_id = ?";
+    conn.query(checkQuery, [gastoId], (checkErr, checkResult) => {
+      if (checkErr) {
+        conn.release();
+        console.error("❌ Error verificando gasto:", checkErr);
+        return res.status(500).json({ success: false, message: "Error al verificar gasto" });
+      }
+
+      if (checkResult.length === 0) {
+        conn.release();
+        return res.status(404).json({ success: false, message: "Gasto no encontrado" });
+      }
+
+      // Iniciar transacción
+      conn.beginTransaction((err) => {
+        if (err) {
+          conn.release();
+          console.error("❌ Error iniciando transacción:", err);
+          return res.status(500).json({ success: false, message: "Error al iniciar transacción" });
+        }
+
+        // 🧾 Actualizar gasto principal
+        const updateGasto = `
+          UPDATE gastos 
+          SET descripcion = ?, 
+              monto = ?, 
+              categoria_id = ?, 
+              periodo_id = ?, 
+              fecha_gasto = ?, 
+              observaciones = ?, 
+              EmpId = ?, 
+              usuario_id = ?,
+              fecha_modificacion = CURRENT_TIMESTAMP
+          WHERE gasto_id = ?
+        `;
+
+        conn.query(
+          updateGasto,
+          [
+            descripcion,
+            monto,
+            categoria_id,
+            periodo_id,
+            fecha_gasto,
+            observaciones || null,
+            EmpId || null,
+            1, // usuario_id (actualizar si tienes sistema de usuarios)
+            gastoId
+          ],
+          (err, result) => {
+            if (err) {
+              return conn.rollback(() => {
+                conn.release();
+                console.error("❌ Error actualizando gasto:", err);
+                res.status(500).json({ success: false, message: "Error al actualizar gasto" });
+              });
+            }
+
+            // 💳 Eliminar tipos de pago existentes
+            const deletePagos = "DELETE FROM gasto_tipo_pago WHERE gasto_id = ?";
+            conn.query(deletePagos, [gastoId], (err) => {
+              if (err) {
+                return conn.rollback(() => {
+                  conn.release();
+                  console.error("❌ Error eliminando tipos de pago anteriores:", err);
+                  res.status(500).json({ success: false, message: "Error al eliminar tipos de pago anteriores" });
+                });
+              }
+
+              // 🔁 Insertar nuevos tipos de pago
+              const insertPago = `
+                INSERT INTO gasto_tipo_pago (gasto_id, tipo_pago_id, monto)
+                VALUES (?, ?, ?)
+              `;
+
+              const promises = pagos.map((pago) => {
+                return new Promise((resolve, reject) => {
+                  const tipoId = parseInt(pago.tipo_pago_id, 10);
+                  const montoPago = parseFloat(pago.monto);
+
+                  if (!tipoId || isNaN(tipoId) || isNaN(montoPago)) {
+                    console.warn("⚠️ Tipo de pago inválido omitido:", pago);
+                    return resolve();
+                  }
+
+                  conn.query(insertPago, [gastoId, tipoId, montoPago], (err) => {
+                    if (err) reject(err);
+                    else resolve();
+                  });
+                });
+              });
+
+              // 🔁 Ejecutar todos los inserts de pagos
+              Promise.all(promises)
+                .then(() => {
+                  conn.commit((err) => {
+                    if (err) {
+                      return conn.rollback(() => {
+                        conn.release();
+                        console.error("❌ Error confirmando transacción:", err);
+                        res.status(500).json({ success: false, message: "Error al confirmar transacción" });
+                      });
+                    }
+
+                    conn.release();
+                    res.json({
+                      success: true,
+                      message: "✅ Gasto actualizado correctamente",
+                      gasto_id: gastoId,
+                    });
+                  });
+                })
+                .catch((err) => {
+                  conn.rollback(() => {
+                    conn.release();
+                    console.error("❌ Error insertando tipos de pago:", err);
+                    res.status(500).json({ success: false, message: "Error al registrar tipos de pago" });
+                  });
+                });
+            });
+          }
+        );
+      });
+    });
+  });
+});
+
+
+
+// ✅ Obtener pagos del gasto
+/* app.get('/api/gasto_pagos', (req, res) => {
+  pool.query(`
+    select t.gasto_id, t.tipo_pago_id, t.monto from gasto_tipo_pago t
+    inner join gastos t2 on t.gasto_id = t2.gasto_id;
+    `, (err, results) => {
+    if (err) {
+      console.error('❌ Error al obtener categorías:', err);
+      return res.status(500).json({ error: 'Error al obtener categorías' });
+    }
+    res.json(results);
+  });
 }); */
+app.get('/api/gastos/:id/pagos', (req, res) => {
+  const gastoId = req.params.id;
+  
+  pool.query(`
+    SELECT t.*, tp.nombre as tipo_pago_nombre 
+    FROM gasto_tipo_pago t
+    LEFT JOIN tipo_pago tp ON t.tipo_pago_id = tp.tipo_pago_id
+    WHERE t.gasto_id = ?
+  `, [gastoId], (err, results) => {
+    if (err) {
+      console.error('❌ Error al obtener pagos del gasto:', err);
+      return res.status(500).json({ error: 'Error al obtener pagos' });
+    }
+    res.json(results);
+  });
+});
+
+
+
+
+
+
+
+
+
+
+
 
 
 // ✅ Obtener categorias
@@ -1024,14 +1229,14 @@ app.get("/", (req, res) => {
 app.get('/api/venta', async (req, res) => {
   try {
     const { search, fechaInicio, fechaFin, page = 1, limit = 8 } = req.query;
-    
+
     console.log('🎯 FILTROS RECIBIDOS:', { search, fechaInicio, fechaFin, page, limit });
 
     let baseQuery = `
       FROM venta v 
       LEFT JOIN cliente c ON v.ClienteID = c.ClienteID 
     `;
-    
+
     let whereConditions = [];
     const params = [];
 
@@ -1107,9 +1312,9 @@ app.get('/api/venta', async (req, res) => {
 
   } catch (error) {
     console.error('❌ Error en /api/venta:', error);
-    res.status(500).json({ 
+    res.status(500).json({
       error: 'Error al cargar ventas',
-      detalles: error.message 
+      detalles: error.message
     });
   }
 });
@@ -1352,10 +1557,13 @@ app.get("/api/comisiones/:empId", (req, res) => {
 // ✅ 1. Listar todos los gastos
 app.get("/api/gastos", (req, res) => {
   const sql = `
-    SELECT g.*, c.Nombre, CONCAT(e.nombre, ' ', e.apellido) usuario
+	  SELECT g.*, c.Nombre categoria_nombre, p.nombre periodo_nombre, CONCAT(u.nombre, ' ', u.apellido) usuario, 
+    CONCAT(e.nombres, ' ', e.apellidos) empleado
     FROM gastos g
     LEFT JOIN categoria_gasto c ON g.categoria_id = c.categoria_id
-    LEFT JOIN usuario e ON g.usuario_id = e.usuario_id
+    LEFT JOIN usuario u ON g.usuario_id = u.usuario_id
+    LEFT JOIN periodo p ON p.periodo_id = g.periodo_id
+    LEFT JOIN empleado e ON g.EmpId = e.EmpId
     ORDER BY g.gasto_id DESC;
   `;
   pool.query(sql, (err, results) => {
@@ -1368,13 +1576,13 @@ app.get("/api/gastos", (req, res) => {
 });
 
 // ✅ 2. Obtener un gasto específico por ID
-app.get("/api/gastos/:id", (req, res) => {
+/* app.get("/api/gastos/:id", (req, res) => {
   const { id } = req.params;
   const sql = `
-    SELECT g.*, c.NombreCategoria
+    SELECT g.*, c.descripcion
     FROM gastos g
-    LEFT JOIN categoria_gasto c ON g.CategoriaID = c.CategoriaID
-    WHERE g.GastoID = ?
+    LEFT JOIN categoria_gasto c ON g.categoria_id = c.categoria_id
+    WHERE g.gastoid = ?
   `;
   pool.query(sql, [id], (err, results) => {
     if (err) {
@@ -1386,7 +1594,7 @@ app.get("/api/gastos/:id", (req, res) => {
     }
     res.json(results[0]);
   });
-});
+}); */
 
 
 
@@ -1432,9 +1640,9 @@ app.delete("/api/gastos/:id", (req, res) => {
 app.get('/api/estadisticas/ventas', async (req, res) => {
   try {
     const { search, fechaInicio, fechaFin } = req.query;
-    
+
     console.log('📊 Parámetros recibidos:', { search, fechaInicio, fechaFin });
-    
+
     let query = `
       SELECT 
         COALESCE(SUM(Total), 0) as totalVentas,
@@ -1444,54 +1652,54 @@ app.get('/api/estadisticas/ventas', async (req, res) => {
       FROM venta 
       WHERE 1=1
     `;
-    
+
     const params = [];
-    
+
     if (search && search.trim() !== '') {
       query += ' AND (ClienteID IN (SELECT ClienteID FROM cliente WHERE Nombre LIKE ?) OR VentaID LIKE ?)';
       params.push(`%${search}%`, `%${search}%`);
     }
-    
+
     if (fechaInicio && fechaInicio.trim() !== '') {
       query += ' AND DATE(FechaVenta) >= ?';
       params.push(fechaInicio);
     }
-    
+
     if (fechaFin && fechaFin.trim() !== '') {
       query += ' AND DATE(FechaVenta) <= ?';
       params.push(fechaFin);
     }
-    
+
     console.log('📊 Consulta SQL:', query);
     console.log('📊 Parámetros:', params);
-    
+
     // CAMBIO AQUÍ: usar pool.query en lugar de db.execute
     pool.query(query, params, (err, result) => {
       if (err) {
         console.error('❌ Error en consulta de estadísticas:', err);
-        return res.status(500).json({ 
+        return res.status(500).json({
           error: 'Error al cargar estadísticas',
-          detalles: err.message 
+          detalles: err.message
         });
       }
-      
+
       const estadisticas = {
         totalVentas: parseFloat(result[0]?.totalVentas) || 0,
         ventasPagadas: parseInt(result[0]?.ventasPagadas) || 0,
         ventasAnuladas: parseInt(result[0]?.ventasAnuladas) || 0,
         totalRegistros: parseInt(result[0]?.totalRegistros) || 0
       };
-      
+
       console.log('📊 Estadísticas calculadas:', estadisticas);
-      
+
       res.json(estadisticas);
     });
-    
+
   } catch (error) {
     console.error('❌ Error en estadísticas:', error);
-    res.status(500).json({ 
+    res.status(500).json({
       error: 'Error al cargar estadísticas',
-      detalles: error.message 
+      detalles: error.message
     });
   }
 });
@@ -1523,12 +1731,12 @@ const authenticateToken = (req, res, next) => {
   // Excluir rutas públicas
   const publicRoutes = [
     '/api/auth/login',
-    '/api/auth/create-admin', 
+    '/api/auth/create-admin',
     '/api/auth/check-table',
     '/api/test',
     '/'
   ];
-  
+
   if (publicRoutes.includes(req.path)) {
     return next();
   }
@@ -1538,21 +1746,21 @@ const authenticateToken = (req, res, next) => {
 
   if (!token) {
     console.log('❌ Token no proporcionado para ruta:', req.path);
-    return res.status(401).json({ 
+    return res.status(401).json({
       success: false,
-      error: 'Token de acceso requerido' 
+      error: 'Token de acceso requerido'
     });
   }
 
   jwt.verify(token, 'secreto_golden_nails_2024', (err, user) => {
     if (err) {
       console.log('❌ Token inválido:', err.message);
-      return res.status(403).json({ 
+      return res.status(403).json({
         success: false,
-        error: 'Token inválido o expirado' 
+        error: 'Token inválido o expirado'
       });
     }
-    
+
     req.user = user;
     next();
   });
@@ -1567,36 +1775,36 @@ app.post('/api/auth/cambiar-password', authenticateToken, async (req, res) => {
   const usuarioId = req.user.usuario_id;
 
   if (!passwordActual || !nuevoPassword) {
-    return res.status(400).json({ 
+    return res.status(400).json({
       success: false,
-      error: 'La contraseña actual y la nueva contraseña son requeridas' 
+      error: 'La contraseña actual y la nueva contraseña son requeridas'
     });
   }
 
   if (nuevoPassword.length < 6) {
-    return res.status(400).json({ 
+    return res.status(400).json({
       success: false,
-      error: 'La nueva contraseña debe tener al menos 6 caracteres' 
+      error: 'La nueva contraseña debe tener al menos 6 caracteres'
     });
   }
 
   try {
     // Primero verificar la contraseña actual
     const sqlVerificar = 'SELECT contrasena FROM usuario WHERE usuario_id = ?';
-    
+
     pool.query(sqlVerificar, [usuarioId], async (err, results) => {
       if (err) {
         console.error('Error verificando contraseña actual:', err);
-        return res.status(500).json({ 
+        return res.status(500).json({
           success: false,
-          error: 'Error al verificar contraseña' 
+          error: 'Error al verificar contraseña'
         });
       }
 
       if (results.length === 0) {
-        return res.status(404).json({ 
+        return res.status(404).json({
           success: false,
-          error: 'Usuario no encontrado' 
+          error: 'Usuario no encontrado'
         });
       }
 
@@ -1604,11 +1812,11 @@ app.post('/api/auth/cambiar-password', authenticateToken, async (req, res) => {
 
       // Verificar que la contraseña actual sea correcta
       const isPasswordValid = await bcryptjs.compare(passwordActual, usuario.contrasena);
-      
+
       if (!isPasswordValid) {
-        return res.status(400).json({ 
+        return res.status(400).json({
           success: false,
-          error: 'La contraseña actual es incorrecta' 
+          error: 'La contraseña actual es incorrecta'
         });
       }
 
@@ -1617,37 +1825,37 @@ app.post('/api/auth/cambiar-password', authenticateToken, async (req, res) => {
 
       // Actualizar la contraseña
       const sqlActualizar = 'UPDATE usuario SET contrasena = ? WHERE usuario_id = ?';
-      
+
       pool.query(sqlActualizar, [hashedPassword, usuarioId], (err, results) => {
         if (err) {
           console.error('Error actualizando contraseña:', err);
-          return res.status(500).json({ 
+          return res.status(500).json({
             success: false,
-            error: 'Error al actualizar contraseña' 
+            error: 'Error al actualizar contraseña'
           });
         }
 
         if (results.affectedRows === 0) {
-          return res.status(404).json({ 
+          return res.status(404).json({
             success: false,
-            error: 'Usuario no encontrado' 
+            error: 'Usuario no encontrado'
           });
         }
 
         console.log(`✅ Contraseña actualizada para usuario ID: ${usuarioId}`);
-        
+
         res.json({
           success: true,
           message: 'Contraseña actualizada exitosamente'
         });
       });
     });
-    
+
   } catch (error) {
     console.error('Error en proceso de cambio de contraseña:', error);
-    res.status(500).json({ 
+    res.status(500).json({
       success: false,
-      error: 'Error interno del servidor' 
+      error: 'Error interno del servidor'
     });
   }
 });
@@ -1658,9 +1866,9 @@ app.put('/api/auth/perfil', authenticateToken, async (req, res) => {
   const usuarioId = req.user.usuario_id;
 
   if (!nombre || !apellido || !correo) {
-    return res.status(400).json({ 
+    return res.status(400).json({
       success: false,
-      error: 'Nombre, apellido y correo son requeridos' 
+      error: 'Nombre, apellido y correo son requeridos'
     });
   }
 
@@ -1670,48 +1878,48 @@ app.put('/api/auth/perfil', authenticateToken, async (req, res) => {
       SET nombre = ?, apellido = ?, correo = ?, telefono = ?, direccion = ?
       WHERE usuario_id = ?
     `;
-    
+
     pool.query(sql, [nombre, apellido, correo, telefono, direccion, usuarioId], (err, results) => {
       if (err) {
         console.error('Error actualizando perfil:', err);
-        
+
         // Manejar error de duplicado de correo
         if (err.code === 'ER_DUP_ENTRY') {
-          return res.status(400).json({ 
+          return res.status(400).json({
             success: false,
-            error: 'El correo electrónico ya está en uso' 
+            error: 'El correo electrónico ya está en uso'
           });
         }
-        
-        return res.status(500).json({ 
+
+        return res.status(500).json({
           success: false,
-          error: 'Error al actualizar perfil' 
+          error: 'Error al actualizar perfil'
         });
       }
 
       if (results.affectedRows === 0) {
-        return res.status(404).json({ 
+        return res.status(404).json({
           success: false,
-          error: 'Usuario no encontrado' 
+          error: 'Usuario no encontrado'
         });
       }
 
       // Obtener los datos actualizados del usuario
       const sqlUsuario = 'SELECT usuario_id, nombre, apellido, usuario, correo, telefono, direccion, rol, estado FROM usuario WHERE usuario_id = ?';
-      
+
       pool.query(sqlUsuario, [usuarioId], (err, userResults) => {
         if (err) {
           console.error('Error obteniendo usuario actualizado:', err);
-          return res.status(500).json({ 
+          return res.status(500).json({
             success: false,
-            error: 'Error al obtener datos actualizados' 
+            error: 'Error al obtener datos actualizados'
           });
         }
 
         const usuarioActualizado = userResults[0];
-        
+
         console.log(`✅ Perfil actualizado para usuario: ${usuarioActualizado.usuario}`);
-        
+
         res.json({
           success: true,
           message: 'Perfil actualizado exitosamente',
@@ -1719,12 +1927,12 @@ app.put('/api/auth/perfil', authenticateToken, async (req, res) => {
         });
       });
     });
-    
+
   } catch (error) {
     console.error('Error en proceso de actualización de perfil:', error);
-    res.status(500).json({ 
+    res.status(500).json({
       success: false,
-      error: 'Error interno del servidor' 
+      error: 'Error interno del servidor'
     });
   }
 });
@@ -1734,25 +1942,25 @@ app.get('/api/auth/perfil', authenticateToken, (req, res) => {
   const usuarioId = req.user.usuario_id;
 
   const sql = 'SELECT usuario_id, nombre, apellido, usuario, correo, telefono, direccion, rol, estado FROM usuario WHERE usuario_id = ?';
-  
+
   pool.query(sql, [usuarioId], (err, results) => {
     if (err) {
       console.error('Error obteniendo perfil:', err);
-      return res.status(500).json({ 
+      return res.status(500).json({
         success: false,
-        error: 'Error al obtener datos del perfil' 
+        error: 'Error al obtener datos del perfil'
       });
     }
 
     if (results.length === 0) {
-      return res.status(404).json({ 
+      return res.status(404).json({
         success: false,
-        error: 'Usuario no encontrado' 
+        error: 'Usuario no encontrado'
       });
     }
 
     const usuario = results[0];
-    
+
     res.json({
       success: true,
       user: usuario
@@ -1763,7 +1971,7 @@ app.get('/api/auth/perfil', authenticateToken, (req, res) => {
 
 // MANEJO DE RUTAS NO ENCONTRADAS
 app.use((req, res) => {
-  res.status(404).json({ 
+  res.status(404).json({
     success: false,
     error: 'Ruta no encontrada',
     path: req.path
