@@ -503,6 +503,153 @@ app.delete('/api/citas/:id', (req, res) => {
 });
 
 
+
+
+// 🔹 Registrar una nueva venta (con pool y EmpID por detalle)
+app.post("/api/ventas", (req, res) => {
+  const { ClienteID, FechaVenta, Total, Detalles, Pagos, CitaID, Observaciones } = req.body;
+
+  if (!ClienteID || !Detalles?.length || !Pagos?.length)
+    return res.status(400).json({ error: "Faltan datos en la venta." });
+
+  pool.getConnection((err, connection) => {
+    if (err) return res.status(500).json({ error: "Error al obtener conexión del pool." });
+
+    connection.beginTransaction((err) => {
+      if (err) {
+        connection.release();
+        return res.status(500).json({ error: "Error al iniciar transacción." });
+      }
+
+      // 1️⃣ Insertar venta (sin EmpID)
+      const sqlVenta = `
+        INSERT INTO venta (ClienteID, FechaVenta, Total, CitaID, Observaciones, usuario_id, Estado)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `;
+
+      connection.query(
+        sqlVenta,
+        [ClienteID, FechaVenta, Total, CitaID || null, Observaciones || null, 1, 'Pagada'],
+        (err, resultVenta) => {
+          if (err) {
+            return connection.rollback(() => {
+              connection.release();
+              res.status(500).json({ error: "Error al registrar venta." });
+            });
+          }
+
+          const ventaID = resultVenta.insertId;
+
+          // 2️⃣ Insertar detalles (ahora con EmpID)
+          const sqlDetalle = `
+            INSERT INTO venta_detalle (VentaID, ArticuloID, Cantidad, PrecioUnitario, EmpID)
+            VALUES ?
+          `;
+          const valoresDetalles = Detalles.map((d) => [
+            ventaID,
+            d.ArticuloID,
+            d.Cantidad,
+            d.PrecioUnitario,
+            d.EmpID,
+          ]);
+
+          connection.query(sqlDetalle, [valoresDetalles], (err) => {
+            if (err) {
+              return connection.rollback(() => {
+                connection.release();
+                res.status(500).json({ error: "Error al registrar detalles de venta." });
+              });
+            }
+
+            // 3️⃣ Insertar tipos de pago
+            const sqlPagos = `
+              INSERT INTO venta_tipo_pago (VentaID, tipo_pago_id, monto)
+              VALUES ?
+            `;
+            const valoresPagos = Pagos.map((p) => [
+              ventaID,
+              p.TipoPagoID,
+              p.Monto,
+            ]);
+
+            connection.query(sqlPagos, [valoresPagos], (err) => {
+              if (err) {
+                return connection.rollback(() => {
+                  connection.release();
+                  res.status(500).json({ error: "Error al registrar pagos." });
+                });
+              }
+
+              // 🔹 NUEVO: Actualizar estado de la cita si existe CitaID
+              if (CitaID) {
+                const sqlActualizarCita = `
+                  UPDATE citas 
+                  SET Estado = 'Completada' 
+                  WHERE CitaID = ?
+                `;
+
+                connection.query(sqlActualizarCita, [CitaID], (err) => {
+                  if (err) {
+                    return connection.rollback(() => {
+                      connection.release();
+                      res.status(500).json({ error: "Error al actualizar estado de la cita." });
+                    });
+                  }
+
+                  // 4️⃣ Confirmar la transacción
+                  connection.commit((err) => {
+                    if (err) {
+                      return connection.rollback(() => {
+                        connection.release();
+                        res.status(500).json({ error: "Error al confirmar la transacción." });
+                      });
+                    }
+
+                    connection.release();
+                    res.json({
+                      message: "✅ Venta registrada correctamente y cita completada",
+                      ventaID,
+                    });
+                  });
+                });
+              } else {
+                // 🔹 Si no hay cita, confirmar transacción normalmente
+                connection.commit((err) => {
+                  if (err) {
+                    return connection.rollback(() => {
+                      connection.release();
+                      res.status(500).json({ error: "Error al confirmar la transacción." });
+                    });
+                  }
+
+                  connection.release();
+                  res.json({
+                    message: "✅ Venta registrada correctamente",
+                    ventaID,
+                  });
+                });
+              }
+            });
+          });
+        }
+      );
+    });
+  });
+});
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 // ✅ Obtener citas filtradas para combo con búsqueda
 app.get("/api/citascombo", (req, res) => {
   const { search = "" } = req.query; // parámetro opcional ?search=
@@ -959,137 +1106,6 @@ app.get("/api/tipos_pago", (req, res) => {
   });
 });
 
-// 🔹 Registrar una nueva venta (con pool y EmpID por detalle)
-app.post("/api/ventas", (req, res) => {
-  const { ClienteID, FechaVenta, Total, Detalles, Pagos, CitaID, Observaciones } = req.body;
-
-  if (!ClienteID || !Detalles?.length || !Pagos?.length)
-    return res.status(400).json({ error: "Faltan datos en la venta." });
-
-  pool.getConnection((err, connection) => {
-    if (err) return res.status(500).json({ error: "Error al obtener conexión del pool." });
-
-    connection.beginTransaction((err) => {
-      if (err) {
-        connection.release();
-        return res.status(500).json({ error: "Error al iniciar transacción." });
-      }
-
-      // 1️⃣ Insertar venta (sin EmpID)
-      const sqlVenta = `
-        INSERT INTO venta (ClienteID, FechaVenta, Total, CitaID, Observaciones, usuario_id, Estado)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-      `;
-
-      connection.query(
-        sqlVenta,
-        [ClienteID, FechaVenta, Total, CitaID || null, Observaciones || null, 1, 'Pagada'],
-        (err, resultVenta) => {
-          if (err) {
-            return connection.rollback(() => {
-              connection.release();
-              res.status(500).json({ error: "Error al registrar venta." });
-            });
-          }
-
-          const ventaID = resultVenta.insertId;
-
-          // 2️⃣ Insertar detalles (ahora con EmpID)
-          const sqlDetalle = `
-            INSERT INTO venta_detalle (VentaID, ArticuloID, Cantidad, PrecioUnitario, EmpID)
-            VALUES ?
-          `;
-          const valoresDetalles = Detalles.map((d) => [
-            ventaID,
-            d.ArticuloID,
-            d.Cantidad,
-            d.PrecioUnitario,
-            d.EmpID,
-          ]);
-
-          connection.query(sqlDetalle, [valoresDetalles], (err) => {
-            if (err) {
-              return connection.rollback(() => {
-                connection.release();
-                res.status(500).json({ error: "Error al registrar detalles de venta." });
-              });
-            }
-
-            // 3️⃣ Insertar tipos de pago
-            const sqlPagos = `
-              INSERT INTO venta_tipo_pago (VentaID, tipo_pago_id, monto)
-              VALUES ?
-            `;
-            const valoresPagos = Pagos.map((p) => [
-              ventaID,
-              p.TipoPagoID,
-              p.Monto,
-            ]);
-
-            connection.query(sqlPagos, [valoresPagos], (err) => {
-              if (err) {
-                return connection.rollback(() => {
-                  connection.release();
-                  res.status(500).json({ error: "Error al registrar pagos." });
-                });
-              }
-
-              // 🔹 NUEVO: Actualizar estado de la cita si existe CitaID
-              if (CitaID) {
-                const sqlActualizarCita = `
-                  UPDATE citas 
-                  SET Estado = 'Completada' 
-                  WHERE CitaID = ?
-                `;
-
-                connection.query(sqlActualizarCita, [CitaID], (err) => {
-                  if (err) {
-                    return connection.rollback(() => {
-                      connection.release();
-                      res.status(500).json({ error: "Error al actualizar estado de la cita." });
-                    });
-                  }
-
-                  // 4️⃣ Confirmar la transacción
-                  connection.commit((err) => {
-                    if (err) {
-                      return connection.rollback(() => {
-                        connection.release();
-                        res.status(500).json({ error: "Error al confirmar la transacción." });
-                      });
-                    }
-
-                    connection.release();
-                    res.json({
-                      message: "✅ Venta registrada correctamente y cita completada",
-                      ventaID,
-                    });
-                  });
-                });
-              } else {
-                // 🔹 Si no hay cita, confirmar transacción normalmente
-                connection.commit((err) => {
-                  if (err) {
-                    return connection.rollback(() => {
-                      connection.release();
-                      res.status(500).json({ error: "Error al confirmar la transacción." });
-                    });
-                  }
-
-                  connection.release();
-                  res.json({
-                    message: "✅ Venta registrada correctamente",
-                    ventaID,
-                  });
-                });
-              }
-            });
-          });
-        }
-      );
-    });
-  });
-});
 
 
 
