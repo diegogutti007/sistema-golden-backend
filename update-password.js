@@ -11,7 +11,7 @@ const pool = mysql.createPool({
 });
 
 async function updateAdminPassword() {
-  const nuevaContrasena = 'admin123'; // La nueva contraseña que quieres
+  const nuevaContrasena = 'Pichona.01'; // La nueva contraseña que quieres
   
   try {
     // Encriptar la nueva contraseña
@@ -31,7 +31,7 @@ async function updateAdminPassword() {
         } else {
           console.log('✅ Contraseña actualizada exitosamente');
           console.log('👤 Usuario: dgutierrez');
-          console.log('🔑 Nueva contraseña: admin123');
+          console.log('🔑 Nueva contraseña: Pichona.01');
           console.log('🔐 Contraseña encriptada correctamente');
         }
         

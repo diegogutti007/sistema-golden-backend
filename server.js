@@ -524,9 +524,8 @@ app.post("/api/ventas", (req, res) => {
       // 1️⃣ Insertar venta (sin EmpID)
       const sqlVenta = `
         INSERT INTO venta (ClienteID, FechaVenta, Total, CitaID, Observaciones, usuario_id, Estado)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, CONVERT_TZ(STR_TO_DATE(?, '%Y-%m-%dT%H:%i:%s.%fZ'), '+00:00', '-05:00'), ?, ?, ?, ?, ?)
       `;
-
       connection.query(
         sqlVenta,
         [ClienteID, FechaVenta, Total, CitaID || null, Observaciones || null, 1, 'Pagada'],
@@ -534,9 +533,31 @@ app.post("/api/ventas", (req, res) => {
           if (err) {
             return connection.rollback(() => {
               connection.release();
-              res.status(500).json({ error: "Error al registrar venta." });
+              res.status(500).json({ ClienteID, FechaVenta, Total, Detalles, Pagos, CitaID, Observaciones});
             });
           }
+
+/*                   if (err) {
+  console.log("❌ Error SQL al insertar venta:", err.message);
+  console.log("❌ Código SQL:", err.code);
+  console.log("❌ SQL:", sqlVenta);
+  console.log("❌ Valores:", [ClienteID, FechaVenta, Total, CitaID || null, Observaciones || null, 1, 'Pagada']);
+  
+  return connection.rollback(() => {
+    connection.release();
+    // Retorna un objeto de error consistente
+    res.status(500).json({ 
+      error: "Error al registrar venta en la base de datos",
+      sqlError: err.message,
+      sqlCode: err.code,
+      detalles: "Revisar logs del servidor"
+    });
+  });
+}
+
+ */
+
+
 
           const ventaID = resultVenta.insertId;
 
