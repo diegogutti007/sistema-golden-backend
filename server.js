@@ -536,29 +536,6 @@ app.post("/api/ventas", (req, res) => {
               res.status(500).json({ ClienteID, FechaVenta, Total, Detalles, Pagos, CitaID, Observaciones});
             });
           }
-
-/*                   if (err) {
-  console.log("❌ Error SQL al insertar venta:", err.message);
-  console.log("❌ Código SQL:", err.code);
-  console.log("❌ SQL:", sqlVenta);
-  console.log("❌ Valores:", [ClienteID, FechaVenta, Total, CitaID || null, Observaciones || null, 1, 'Pagada']);
-  
-  return connection.rollback(() => {
-    connection.release();
-    // Retorna un objeto de error consistente
-    res.status(500).json({ 
-      error: "Error al registrar venta en la base de datos",
-      sqlError: err.message,
-      sqlCode: err.code,
-      detalles: "Revisar logs del servidor"
-    });
-  });
-}
-
- */
-
-
-
           const ventaID = resultVenta.insertId;
 
           // 2️⃣ Insertar detalles (ahora con EmpID)
@@ -660,11 +637,244 @@ app.post("/api/ventas", (req, res) => {
 
 
 
+// GET /api/ventas/resumen-dia?fecha=YYYY-MM-DD
+app.get("/api/ventas/resumen-dia", (req, res) => {
+  const { fecha } = req.query;
+  
+  if (!fecha) {
+    return res.status(400).json({ error: "La fecha es requerida" });
+  }
+  
+  const sql = `
+    SELECT 
+      tp.nombre as tipo_pago,
+      COALESCE(SUM(vtp.monto), 0) as total
+    FROM venta v
+    LEFT JOIN venta_tipo_pago vtp ON v.VentaID = vtp.VentaID
+    LEFT JOIN tipo_pago tp ON vtp.tipo_pago_id = tp.tipo_pago_id
+    WHERE DATE(v.FechaVenta) = ?
+    GROUP BY tp.tipo_pago_id, tp.nombre
+  `;
+  
+  pool.query(sql, [fecha], (err, resultados) => {
+    if (err) {
+      console.error("❌ Error obteniendo resumen de ventas:", err);
+      return res.status(500).json({ error: "Error obteniendo resumen de ventas" });
+    }
+    
+    // Formatear respuesta
+    const resumen = {
+      efectivo: 0,
+      yape: 0,
+      plin: 0,
+      tarjeta: 0,
+      total: 0
+    };
+    
+    resultados.forEach(row => {
+      const tipo = (row.tipo_pago || '').toLowerCase();
+      const total = parseFloat(row.total) || 0;
+      
+      if (tipo.includes('efectivo')) resumen.efectivo = total;
+      else if (tipo.includes('yape')) resumen.yape = total;
+      else if (tipo.includes('plin')) resumen.plin = total;
+      else if (tipo.includes('tarjeta')) resumen.tarjeta = total;
+      
+      resumen.total += total;
+    });
+    
+    res.json(resumen);
+  });
+});
+
+
+// 2. GET /api/gastos - Obtener gastos por fecha
+app.get("/api/gastos/resumen-dia", (req, res) => {
+  const { fecha } = req.query;
+  
+  if (!fecha) {
+    return res.status(400).json({ error: "Fecha requerida" });
+  }
+  
+  console.log("💰 Buscando gastos para:", fecha);
+  
+  const sql = `
+    SELECT 
+      t.descripcion, 
+      t.monto, 
+      t2.nombre as categoria, 
+      t.fecha_gasto as fecha 
+    FROM gastos t
+    INNER JOIN categoria_gasto t2 ON t.categoria_id = t2.categoria_id
+    WHERE DATE(t.fecha_gasto) = ?
+    ORDER BY t.fecha_creacion DESC
+  `;
+  
+  pool.query(sql, [fecha], (err, gastos) => {
+    if (err) {
+      console.error("❌ Error obteniendo gastos:", err);
+      return res.status(500).json({ 
+        error: "Error obteniendo gastos",
+        detalles: err.message 
+      });
+    }
+    
+    console.log(`✅ ${gastos.length} gastos encontrados para ${fecha}`);
+    res.json(gastos);
+  });
+});
+
+
+// En tu server.js - Endpoint corregido
+app.post("/api/cierre-caja", (req, res) => {
+  const datos = req.body;
+  console.log("💾 Guardando cierre de caja:", datos);
+  
+  // Validaciones
+  if (!datos.fecha || !datos.responsable) {
+    return res.status(400).json({ error: "Fecha y responsable son requeridos" });
+  }
+  
+  // Parsear valores según los nombres de tu tabla
+  const dinero_inicial = parseFloat(datos.dinero_inicial) || 0;
+  const dinero_final_caja = parseFloat(datos.dinero_final_caja) || 0;
+  const ventas_efectivo = parseFloat(datos.ventas_efectivo) || 0;
+  const ventas_yape = parseFloat(datos.ventas_yape) || 0;
+  const ventas_plin = parseFloat(datos.ventas_plin) || 0;
+  const ventas_tarjeta = parseFloat(datos.ventas_tarjeta) || 0;
+  const ventas_total = parseFloat(datos.ventas_total) || 0;
+  const total_gastos = parseFloat(datos.total_gastos) || 0;
+  const efectivo_esperado = parseFloat(datos.efectivo_esperado) || 0;
+  const diferencia = parseFloat(datos.diferencia) || 0;
+  const dinero_retirar = parseFloat(datos.dinero_retirar) || 0;
+  const estado = datos.estado || "CORRECTO";
+  
+  const sql = `
+    INSERT INTO cierre_caja (
+      fecha, hora, responsable,
+      dinero_inicial, dinero_final_caja,
+      ventas_efectivo, ventas_yape, ventas_plin, ventas_tarjeta, ventas_total,
+      total_gastos,
+      efectivo_esperado, diferencia, dinero_retirar,
+      estado
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `;
+  
+  const valores = [
+    datos.fecha,
+    datos.hora || new Date().toLocaleTimeString('es-PE', { hour12: false }),
+    datos.responsable,
+    dinero_inicial,
+    dinero_final_caja,
+    ventas_efectivo,
+    ventas_yape,
+    ventas_plin,
+    ventas_tarjeta,
+    ventas_total,
+    total_gastos,
+    efectivo_esperado,
+    diferencia,
+    dinero_retirar,
+    estado
+  ];
+  
+  pool.query(sql, valores, (err, result) => {
+    if (err) {
+      console.error("❌ Error guardando cierre:", err);
+      
+      // Si es error de duplicado (por la UNIQUE KEY)
+      if (err.code === 'ER_DUP_ENTRY') {
+        return res.status(400).json({ 
+          error: "Ya existe un cierre para esta fecha con este responsable. ¿Desea actualizarlo?" 
+        });
+      }
+      
+      return res.status(500).json({ 
+        error: "Error al guardar cierre de caja",
+        detalles: err.message 
+      });
+    }
+    
+    console.log("✅ Cierre guardado con ID:", result.insertId);
+    res.json({
+      success: true,
+      message: "Cierre de caja registrado exitosamente",
+      cierreId: result.insertId,
+      estado: estado
+    });
+  });
+});
 
 
 
 
 
+app.get("/api/caja/dinero-inicial", (req, res) => {
+  const { fecha } = req.query;
+  
+  console.log("💵 Buscando dinero inicial para:", fecha || "sin fecha");
+  
+  // Valor por defecto
+  let montoInicial = 500.00;
+  
+  if (!fecha) {
+    console.log("⚠️ Sin fecha, usando valor por defecto:", montoInicial);
+    return res.json({ monto: montoInicial });
+  }
+  
+  const sql = `
+    SELECT dinero_final_caja as monto 
+    FROM cierre_caja 
+    WHERE estado = 'CORRECTO'
+    ORDER BY fecha DESC, fecha_creacion DESC 
+    LIMIT 1
+  `;
+  
+  pool.query(sql, [fecha], (err, resultados) => {
+    if (err) {
+      console.log("⚠️ Error al buscar cierre anterior, usando valor por defecto");
+      return res.json({ monto: montoInicial });
+    }
+    
+    if (resultados.length > 0 && resultados[0].monto !== null) {
+      montoInicial = parseFloat(resultados[0].monto) || 500.00;
+      console.log("✅ Dinero inicial encontrado:", montoInicial);
+    } else {
+      console.log("⚠️ No hay cierre anterior, usando valor por defecto:", montoInicial);
+    }
+    
+    res.json({ monto: montoInicial });
+  });
+});
+
+
+// En tu backend (ejemplo)
+app.get('/api/cierre-caja/verificar', async (req, res) => {
+  try {
+    const { fecha } = req.query;
+    
+    // Buscar cierre para la fecha
+    const cierre = await CierreCaja.findOne({ 
+      fecha: fecha 
+    }).sort({ fecha_creacion: -1 }); // El más reciente
+    
+    if (cierre) {
+      return res.json({
+        existe: true,
+        cierre: cierre
+      });
+    }
+    
+    return res.json({
+      existe: false,
+      cierre: null
+    });
+    
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Error verificando cierre' });
+  }
+});
 
 
 
