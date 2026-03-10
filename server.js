@@ -329,6 +329,26 @@ app.get('/api/listaempleado', (req, res) => {
 });
 
 
+app.get('/api/listaempleadoactivo', (req, res) => {
+  const query = `
+        SELECT e.EmpId, e.Nombres, e.Apellidos, e.DocID, 
+           e.Direccion, e.FechaNacimiento, e.Sueldo, e.fecha_ingreso, e.fecha_renuncia, t.Tipo_EmpId,
+           t.Descripcion AS TipoEmpleado, t.Comision, c.Cargo_EmpId, c.Descripcion
+        FROM empleado e
+        JOIN tipo_empleado t ON e.Tipo_EmpId = t.Tipo_EmpId
+        JOIN cargo_empleado c ON e.Cargo_EmpId = c.Cargo_EmpId
+        WHERE FECHA_RENUNCIA IS NULL
+        ORDER BY e.fecha_ingreso;
+  `;
+
+  pool.query(query, (err, results) => {
+    if (err) {
+      console.error("❌ Error al obtener empleados:", err);
+      return res.status(500).json({ error: "Error al obtener empleados" });
+    }
+    res.json(results);
+  });
+});
 
 // Modificar empleado
 app.put('/api/empleado/:id', (req, res) => {
