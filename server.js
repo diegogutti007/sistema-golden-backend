@@ -1569,6 +1569,219 @@ app.get('/api/venta', async (req, res) => {
 
 
 
+
+app.get('/api/estadisticas-ventas', (req, res) => {
+  try {
+    const diaParam = req.query.dia || new Date().toISOString().split('T')[0];
+    const inicioSemanaParam = req.query.inicioSemana || diaParam;
+    const finSemanaParam = req.query.finSemana || diaParam;
+    
+    console.log('📅 Fechas para consulta:', { 
+      dia: diaParam, 
+      inicioSemana: inicioSemanaParam, 
+      finSemana: finSemanaParam 
+    });
+
+    // Objeto para almacenar resultados
+    const resultados = {
+      ventasDia: [],
+      ventasSemana: [],
+      citasDia: 0,
+      citasSemana: 0,
+      totalGeneral: 0,
+      errores: []
+    };
+
+    // Contador para llevar el control de consultas
+    let consultasCompletadas = 0;
+    const totalConsultas = 5;
+
+    // Función para verificar si ya completamos todas las consultas
+    const verificarCompletado = () => {
+      consultasCompletadas++;
+      console.log(`🔄 Consulta ${consultasCompletadas}/${totalConsultas} completada`);
+      
+      if (consultasCompletadas === totalConsultas) {
+        // Todas las consultas completadas, enviar respuesta
+        enviarRespuesta();
+      }
+    };
+
+    // Función para enviar la respuesta final
+    const enviarRespuesta = () => {
+      // Función para calcular totales por método de pago
+      const calcularTotales = (ventas) => {
+        let total = 0;
+        let efectivo = 0;
+        let yape = 0;
+        let plin = 0;
+        let tarjeta = 0;
+        
+        ventas.forEach(venta => {
+          // IMPORTANTE: Ajusta estos nombres según tus columnas reales
+          const monto = parseFloat(venta.Total || venta.total || venta.monto || venta.Importe || 0);
+          total += monto;
+          
+          const metodoPago = (venta.MetodoPago || venta.metodo_pago || venta.Metodo_Pago || '').toString().toLowerCase();
+          
+          if (metodoPago.includes('efectivo') || metodoPago === 'cash') {
+            efectivo += monto;
+          } else if (metodoPago.includes('yape')) {
+            yape += monto;
+          } else if (metodoPago.includes('plin')) {
+            plin += monto;
+          } else if (metodoPago.includes('tarjeta') || metodoPago.includes('card')) {
+            tarjeta += monto;
+          } else {
+            // Por defecto contar como efectivo
+            efectivo += monto;
+          }
+        });
+        
+        return { 
+          total: parseFloat(total.toFixed(2)), 
+          efectivo: parseFloat(efectivo.toFixed(2)), 
+          yape: parseFloat(yape.toFixed(2)), 
+          plin: parseFloat(plin.toFixed(2)),
+          tarjeta: parseFloat(tarjeta.toFixed(2))
+        };
+      };
+
+      const totalesDia = calcularTotales(resultados.ventasDia);
+      const totalesSemana = calcularTotales(resultados.ventasSemana);
+
+      const respuesta = {
+        hoy: {
+          ...totalesDia,
+          citasCompletadas: resultados.citasDia,
+          transacciones: resultados.ventasDia.length
+        },
+        semana: {
+          ...totalesSemana,
+          citasCompletadas: resultados.citasSemana,
+          transacciones: resultados.ventasSemana.length
+        },
+        totalGeneral: parseFloat(resultados.totalGeneral.toFixed(2)),
+        errores: resultados.errores.length > 0 ? resultados.errores : undefined
+      };
+
+      console.log('📈 Estadísticas calculadas:', respuesta);
+      
+      // Si hay errores pero al menos tenemos algunos datos, enviar respuesta con datos
+      if (resultados.errores.length > 0) {
+        console.log('⚠️ Se produjeron errores:', resultados.errores);
+      }
+      
+      res.json(respuesta);
+    };
+
+    // 1. CONSULTA: VENTAS DEL DÍA SELECCIONADO
+    pool.query(
+      `SELECT * FROM venta WHERE DATE(FechaVenta) = ?`,
+      [diaParam],
+      (error, results) => {
+        if (error) {
+          console.error('❌ Error al buscar ventas del día:', error);
+          resultados.errores.push('Error ventas día');
+        } else {
+          resultados.ventasDia = results;
+          console.log('✅ Ventas del día encontradas:', results.length);
+        }
+        verificarCompletado();
+      }
+    );
+
+    // 2. CONSULTA: VENTAS DE LA SEMANA ACTUAL
+    pool.query(
+      `SELECT * FROM venta WHERE DATE(FechaVenta) BETWEEN ? AND ?`,
+      [inicioSemanaParam, finSemanaParam],
+      (error, results) => {
+        if (error) {
+          console.error('❌ Error al buscar ventas de la semana:', error);
+          resultados.errores.push('Error ventas semana');
+        } else {
+          resultados.ventasSemana = results;
+          console.log('✅ Ventas de la semana encontradas:', results.length);
+        }
+        verificarCompletado();
+      }
+    );
+
+    // 3. CONSULTA: CITAS COMPLETADAS DÍA
+    // Primero intentamos con la columna 'fecha'
+    pool.query(
+      `SELECT COUNT(*) as total FROM citas WHERE estado = 'Completada' AND DATE(FechaInicio) = ?`,
+      [diaParam],
+      (error, results) => {
+        if (error) {
+          console.error('❌ Error al buscar citas del día (fecha):', error.message);
+          // Si falla, intentamos con 'fecha_cita'
+          pool.query(
+            `SELECT COUNT(*) as total FROM citas WHERE estado = 'Completada' AND DATE(FechaInicio) = ?`,
+            [diaParam],
+            (error2, results2) => {
+              if (error2) {
+                console.error('❌ Error al buscar citas del día (FechaInicio):', error2.message);
+                resultados.errores.push('Error citas día');
+              } else {
+                resultados.citasDia = results2[0]?.total || 0;
+                console.log('✅ Citas completadas día:', resultados.citasDia);
+              }
+              verificarCompletado();
+            }
+          );
+        } else {
+          resultados.citasDia = results[0]?.total || 0;
+          console.log('✅ Citas completadas día:', resultados.citasDia);
+          verificarCompletado();
+        }
+      }
+    );
+
+    // 4. CONSULTA: CITAS COMPLETADAS SEMANA
+    pool.query(
+      `SELECT COUNT(*) as total FROM citas WHERE estado = 'Completada' AND DATE(FechaInicio) BETWEEN ? AND ?`,
+      [inicioSemanaParam, finSemanaParam],
+      (error, results) => {
+        if (error) {
+          console.error('❌ Error al buscar citas de la semana:', error);
+          resultados.errores.push('Error citas semana');
+        } else {
+          resultados.citasSemana = results[0]?.total || 0;
+          console.log('✅ Citas completadas semana:', resultados.citasSemana);
+        }
+        verificarCompletado();
+      }
+    );
+
+    // 5. CONSULTA: TOTAL GENERAL DE VENTAS
+    pool.query(
+      `SELECT SUM(Total) as total FROM venta`,
+      (error, results) => {
+        if (error) {
+          console.error('❌ Error al calcular total general:', error);
+          resultados.errores.push('Error total general');
+        } else {
+          resultados.totalGeneral = parseFloat(results[0]?.total) || 0;
+          console.log('✅ Total general ventas:', resultados.totalGeneral);
+        }
+        verificarCompletado();
+      }
+    );
+
+  } catch (error) {
+    console.error('💥 Error general al obtener estadísticas:', error);
+    res.status(500).json({
+      error: 'Error interno del servidor',
+      hoy: { total: 0, efectivo: 0, yape: 0, plin: 0, tarjeta: 0, citasCompletadas: 0, transacciones: 0 },
+      semana: { total: 0, efectivo: 0, yape: 0, plin: 0, tarjeta: 0, citasCompletadas: 0, transacciones: 0 },
+      totalGeneral: 0
+    });
+  }
+});
+
+
+
 app.get("/api/venta/:id", (req, res) => {
   const { id } = req.params;
 
