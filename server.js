@@ -553,7 +553,7 @@ app.post("/api/ventas", (req, res) => {
           if (err) {
             return connection.rollback(() => {
               connection.release();
-              res.status(500).json({ ClienteID, FechaVenta, Total, Detalles, Pagos, CitaID, Observaciones});
+              res.status(500).json({ ClienteID, FechaVenta, Total, Detalles, Pagos, CitaID, Observaciones });
             });
           }
           const ventaID = resultVenta.insertId;
@@ -660,11 +660,11 @@ app.post("/api/ventas", (req, res) => {
 // GET /api/ventas/resumen-dia?fecha=YYYY-MM-DD
 app.get("/api/ventas/resumen-dia", (req, res) => {
   const { fecha } = req.query;
-  
+
   if (!fecha) {
     return res.status(400).json({ error: "La fecha es requerida" });
   }
-  
+
   const sql = `
     SELECT 
       tp.nombre as tipo_pago,
@@ -675,13 +675,13 @@ app.get("/api/ventas/resumen-dia", (req, res) => {
     WHERE DATE(v.FechaVenta) = ?
     GROUP BY tp.tipo_pago_id, tp.nombre
   `;
-  
+
   pool.query(sql, [fecha], (err, resultados) => {
     if (err) {
       console.error("❌ Error obteniendo resumen de ventas:", err);
       return res.status(500).json({ error: "Error obteniendo resumen de ventas" });
     }
-    
+
     // Formatear respuesta
     const resumen = {
       efectivo: 0,
@@ -690,19 +690,19 @@ app.get("/api/ventas/resumen-dia", (req, res) => {
       tarjeta: 0,
       total: 0
     };
-    
+
     resultados.forEach(row => {
       const tipo = (row.tipo_pago || '').toLowerCase();
       const total = parseFloat(row.total) || 0;
-      
+
       if (tipo.includes('efectivo')) resumen.efectivo = total;
       else if (tipo.includes('yape')) resumen.yape = total;
       else if (tipo.includes('plin')) resumen.plin = total;
       else if (tipo.includes('tarjeta')) resumen.tarjeta = total;
-      
+
       resumen.total += total;
     });
-    
+
     res.json(resumen);
   });
 });
@@ -711,13 +711,13 @@ app.get("/api/ventas/resumen-dia", (req, res) => {
 // 2. GET /api/gastos - Obtener gastos por fecha
 app.get("/api/gastos/resumen-dia", (req, res) => {
   const { fecha } = req.query;
-  
+
   if (!fecha) {
     return res.status(400).json({ error: "Fecha requerida" });
   }
-  
+
   console.log("💰 Buscando gastos para:", fecha);
-  
+
   const sql = `
     SELECT 
       t.descripcion, 
@@ -729,16 +729,16 @@ app.get("/api/gastos/resumen-dia", (req, res) => {
     WHERE DATE(t.fecha_gasto) = ?
     ORDER BY t.fecha_creacion DESC
   `;
-  
+
   pool.query(sql, [fecha], (err, gastos) => {
     if (err) {
       console.error("❌ Error obteniendo gastos:", err);
-      return res.status(500).json({ 
+      return res.status(500).json({
         error: "Error obteniendo gastos",
-        detalles: err.message 
+        detalles: err.message
       });
     }
-    
+
     console.log(`✅ ${gastos.length} gastos encontrados para ${fecha}`);
     res.json(gastos);
   });
@@ -749,12 +749,12 @@ app.get("/api/gastos/resumen-dia", (req, res) => {
 app.post("/api/cierre-caja", (req, res) => {
   const datos = req.body;
   console.log("💾 Guardando cierre de caja:", datos);
-  
+
   // Validaciones
   if (!datos.fecha || !datos.responsable) {
     return res.status(400).json({ error: "Fecha y responsable son requeridos" });
   }
-  
+
   // Parsear valores según los nombres de tu tabla
   const dinero_inicial = parseFloat(datos.dinero_inicial) || 0;
   const dinero_final_caja = parseFloat(datos.dinero_final_caja) || 0;
@@ -768,7 +768,7 @@ app.post("/api/cierre-caja", (req, res) => {
   const diferencia = parseFloat(datos.diferencia) || 0;
   const dinero_retirar = parseFloat(datos.dinero_retirar) || 0;
   const estado = datos.estado || "CORRECTO";
-  
+
   const sql = `
     INSERT INTO cierre_caja (
       fecha, hora, responsable,
@@ -779,7 +779,7 @@ app.post("/api/cierre-caja", (req, res) => {
       estado
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `;
-  
+
   const valores = [
     datos.fecha,
     datos.hora || new Date().toLocaleTimeString('es-PE', { hour12: false }),
@@ -797,24 +797,24 @@ app.post("/api/cierre-caja", (req, res) => {
     dinero_retirar,
     estado
   ];
-  
+
   pool.query(sql, valores, (err, result) => {
     if (err) {
       console.error("❌ Error guardando cierre:", err);
-      
+
       // Si es error de duplicado (por la UNIQUE KEY)
       if (err.code === 'ER_DUP_ENTRY') {
-        return res.status(400).json({ 
-          error: "Ya existe un cierre para esta fecha con este responsable. ¿Desea actualizarlo?" 
+        return res.status(400).json({
+          error: "Ya existe un cierre para esta fecha con este responsable. ¿Desea actualizarlo?"
         });
       }
-      
-      return res.status(500).json({ 
+
+      return res.status(500).json({
         error: "Error al guardar cierre de caja",
-        detalles: err.message 
+        detalles: err.message
       });
     }
-    
+
     console.log("✅ Cierre guardado con ID:", result.insertId);
     res.json({
       success: true,
@@ -831,17 +831,17 @@ app.post("/api/cierre-caja", (req, res) => {
 
 app.get("/api/caja/dinero-inicial", (req, res) => {
   const { fecha } = req.query;
-  
+
   console.log("💵 Buscando dinero inicial para:", fecha || "sin fecha");
-  
+
   // Valor por defecto
   let montoInicial = 500.00;
-  
+
   if (!fecha) {
     console.log("⚠️ Sin fecha, usando valor por defecto:", montoInicial);
     return res.json({ monto: montoInicial });
   }
-  
+
   const sql = `
     SELECT dinero_final_caja as monto 
     FROM cierre_caja 
@@ -849,20 +849,20 @@ app.get("/api/caja/dinero-inicial", (req, res) => {
     ORDER BY fecha DESC, fecha_creacion DESC 
     LIMIT 1
   `;
-  
+
   pool.query(sql, [fecha], (err, resultados) => {
     if (err) {
       console.log("⚠️ Error al buscar cierre anterior, usando valor por defecto");
       return res.json({ monto: montoInicial });
     }
-    
+
     if (resultados.length > 0 && resultados[0].monto !== null) {
       montoInicial = parseFloat(resultados[0].monto) || 500.00;
       console.log("✅ Dinero inicial encontrado:", montoInicial);
     } else {
       console.log("⚠️ No hay cierre anterior, usando valor por defecto:", montoInicial);
     }
-    
+
     res.json({ monto: montoInicial });
   });
 });
@@ -872,24 +872,24 @@ app.get("/api/caja/dinero-inicial", (req, res) => {
 app.get('/api/cierre-caja/verificar', async (req, res) => {
   try {
     const { fecha } = req.query;
-    
+
     // Buscar cierre para la fecha
-    const cierre = await CierreCaja.findOne({ 
-      fecha: fecha 
+    const cierre = await CierreCaja.findOne({
+      fecha: fecha
     }).sort({ fecha_creacion: -1 }); // El más reciente
-    
+
     if (cierre) {
       return res.json({
         existe: true,
         cierre: cierre
       });
     }
-    
+
     return res.json({
       existe: false,
       cierre: null
     });
-    
+
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: 'Error verificando cierre' });
@@ -1256,7 +1256,7 @@ app.put("/api/gastos/:id", (req, res) => {
 }); */
 app.get('/api/gastos/:id/pagos', (req, res) => {
   const gastoId = req.params.id;
-  
+
   pool.query(`
     SELECT t.*, tp.nombre as tipo_pago_nombre 
     FROM gasto_tipo_pago t
@@ -1595,11 +1595,11 @@ app.get('/api/estadisticas-ventas', (req, res) => {
     const diaParam = req.query.dia || new Date().toISOString().split('T')[0];
     const inicioSemanaParam = req.query.inicioSemana || diaParam;
     const finSemanaParam = req.query.finSemana || diaParam;
-    
-    console.log('📅 Fechas para consulta:', { 
-      dia: diaParam, 
-      inicioSemana: inicioSemanaParam, 
-      finSemana: finSemanaParam 
+
+    console.log('📅 Fechas para consulta:', {
+      dia: diaParam,
+      inicioSemana: inicioSemanaParam,
+      finSemana: finSemanaParam
     });
 
     // Objeto para almacenar resultados
@@ -1620,7 +1620,7 @@ app.get('/api/estadisticas-ventas', (req, res) => {
     const verificarCompletado = () => {
       consultasCompletadas++;
       console.log(`🔄 Consulta ${consultasCompletadas}/${totalConsultas} completada`);
-      
+
       if (consultasCompletadas === totalConsultas) {
         // Todas las consultas completadas, enviar respuesta
         enviarRespuesta();
@@ -1636,15 +1636,15 @@ app.get('/api/estadisticas-ventas', (req, res) => {
         let yape = 0;
         let plin = 0;
         let tarjeta = 0;
-        
+
         ventas.forEach(venta => {
           // IMPORTANTE: Ajusta estos nombres según tus columnas reales
-          const monto = parseFloat(venta.Total || venta.total || venta.monto || venta.Importe || 0);
+          const monto = parseFloat(venta.Total || venta.total || 0);
           total += monto;
-          
-          const metodoPago = (venta.MetodoPago || venta.metodo_pago || venta.Metodo_Pago || '').toString().toLowerCase();
-          
-          if (metodoPago.includes('efectivo') || metodoPago === 'cash') {
+
+          const metodoPago = (venta.tipo_pago || '').toString().toLowerCase();
+          console.log('payaso', venta);
+          if (metodoPago.includes('efectivo')) {
             efectivo += monto;
           } else if (metodoPago.includes('yape')) {
             yape += monto;
@@ -1657,11 +1657,11 @@ app.get('/api/estadisticas-ventas', (req, res) => {
             efectivo += monto;
           }
         });
-        
-        return { 
-          total: parseFloat(total.toFixed(2)), 
-          efectivo: parseFloat(efectivo.toFixed(2)), 
-          yape: parseFloat(yape.toFixed(2)), 
+
+        return {
+          total: parseFloat(total.toFixed(2)),
+          efectivo: parseFloat(efectivo.toFixed(2)),
+          yape: parseFloat(yape.toFixed(2)),
           plin: parseFloat(plin.toFixed(2)),
           tarjeta: parseFloat(tarjeta.toFixed(2))
         };
@@ -1686,18 +1686,21 @@ app.get('/api/estadisticas-ventas', (req, res) => {
       };
 
       console.log('📈 Estadísticas calculadas:', respuesta);
-      
+
       // Si hay errores pero al menos tenemos algunos datos, enviar respuesta con datos
       if (resultados.errores.length > 0) {
         console.log('⚠️ Se produjeron errores:', resultados.errores);
       }
-      
+
       res.json(respuesta);
     };
 
     // 1. CONSULTA: VENTAS DEL DÍA SELECCIONADO
     pool.query(
-      `SELECT * FROM venta WHERE DATE(FechaVenta) = ?`,
+      ` SELECT t.VentaID, t.ClienteID, t.FechaVenta, t.Total, t.CitaID, t2.tipo_pago_id , t3.nombre tipo_pago FROM venta t
+        inner join venta_tipo_pago t2 on t2.VentaID = t.VentaID 
+        inner join tipo_pago t3 on t2.tipo_pago_id = t3.tipo_pago_id
+        WHERE DATE(FechaVenta) =  ?`,
       [diaParam],
       (error, results) => {
         if (error) {
@@ -1711,9 +1714,13 @@ app.get('/api/estadisticas-ventas', (req, res) => {
       }
     );
 
+
     // 2. CONSULTA: VENTAS DE LA SEMANA ACTUAL
     pool.query(
-      `SELECT * FROM venta WHERE DATE(FechaVenta) BETWEEN ? AND ?`,
+      `SELECT t.VentaID, t.ClienteID, t.FechaVenta, t.Total, t.CitaID, t2.tipo_pago_id , t3.nombre tipo_pago FROM venta t
+        inner join venta_tipo_pago t2 on t2.VentaID = t.VentaID 
+        inner join tipo_pago t3 on t2.tipo_pago_id = t3.tipo_pago_id
+        WHERE DATE(FechaVenta) BETWEEN ? AND ?`,
       [inicioSemanaParam, finSemanaParam],
       (error, results) => {
         if (error) {
@@ -1776,14 +1783,18 @@ app.get('/api/estadisticas-ventas', (req, res) => {
 
     // 5. CONSULTA: TOTAL GENERAL DE VENTAS
     pool.query(
-      `SELECT SUM(Total) as total FROM venta`,
+      `SELECT SUM(Total) as total 
+        FROM venta
+        WHERE MONTH(FechaVenta) = MONTH(?) 
+        AND YEAR(FechaVenta) = YEAR(?)`,
+      [diaParam, diaParam],
       (error, results) => {
         if (error) {
-          console.error('❌ Error al calcular total general:', error);
-          resultados.errores.push('Error total general');
+          console.error('❌ Error al calcular total mensual:', error);
+          resultados.errores.push('Error total mes');
         } else {
           resultados.totalGeneral = parseFloat(results[0]?.total) || 0;
-          console.log('✅ Total general ventas:', resultados.totalGeneral);
+          console.log('✅ Total ventas del mes:', resultados.totalGeneral);
         }
         verificarCompletado();
       }
