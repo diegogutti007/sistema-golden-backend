@@ -446,10 +446,12 @@ app.delete('/api/empleado/:id', (req, res) => {
 // ✅ Obtener todas las citas/form Citas
 app.get('/api/citas', (req, res) => {
   const query = `
-        SELECT c.*, CONCAT(p.nombre, ' ', p.apellido) AS ClienteNombre, CONCAT(e.nombres, ' ', e.apellidos) AS EmpleadoNombre
+	SELECT c.*, CONCAT(p.nombre, ' ', p.apellido) AS ClienteNombre, 
+  CONCAT(e.nombres, ' ', e.apellidos) AS EmpleadoNombre, v.Total
     FROM citas c
     LEFT JOIN cliente p ON c.ClienteID = p.ClienteID
     LEFT JOIN empleado e ON c.EmpId = e.EmpId
+    LEFT JOIN venta v ON v.CitaID = c.CitaID
     ORDER BY c.FechaInicio;
   `;
   pool.query(query, (err, results) => {
@@ -461,7 +463,7 @@ app.get('/api/citas', (req, res) => {
       title: r.Titulo || r.ClienteNombre || 'Cita sin título',
       descripcion: r.Descripcion,
       start: r.FechaInicio,
-      end: r.FechaFin,
+      end: r.FechaFinj,
       backgroundColor:
         r.Estado === 'Cancelada' ? '#f87171' : // rojo
           r.Estado === 'Completada' ? '#34d399' : // verde
@@ -472,7 +474,8 @@ app.get('/api/citas', (req, res) => {
         empleadoNombre: r.EmpleadoNombre,
         estado: r.Estado,
         clienteID: r.ClienteID,
-        EmpId: r.EmpId
+        EmpId: r.EmpId,
+        Total: r.Total
       }
     }));
 
