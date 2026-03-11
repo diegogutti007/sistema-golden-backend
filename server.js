@@ -1700,9 +1700,9 @@ app.get('/api/estadisticas-ventas', (req, res) => {
 
     // 1. CONSULTA: VENTAS DEL DÍA SELECCIONADO
     pool.query(
-      ` SELECT t.VentaID, t.ClienteID, t.FechaVenta, t.Total, t.CitaID, t2.tipo_pago_id , t3.nombre tipo_pago FROM venta t
-        inner join venta_tipo_pago t2 on t2.VentaID = t.VentaID 
-        inner join tipo_pago t3 on t2.tipo_pago_id = t3.tipo_pago_id
+      ` SELECT distinct t.VentaID, t.ClienteID, t.FechaVenta, t2.monto total, t.CitaID, t2.tipo_pago_id , t3.nombre tipo_pago FROM venta t
+        left join venta_tipo_pago t2 on t2.VentaID = t.VentaID 
+        left join tipo_pago t3 on t2.tipo_pago_id = t3.tipo_pago_id
         WHERE DATE(FechaVenta) =  ?`,
       [diaParam],
       (error, results) => {
@@ -1720,7 +1720,7 @@ app.get('/api/estadisticas-ventas', (req, res) => {
 
     // 2. CONSULTA: VENTAS DE LA SEMANA ACTUAL
     pool.query(
-      `SELECT t.VentaID, t.ClienteID, t.FechaVenta, t.Total, t.CitaID, t2.tipo_pago_id , t3.nombre tipo_pago FROM venta t
+      `SELECT t.VentaID, t.ClienteID, t.FechaVenta, t2.monto total, t.CitaID, t2.tipo_pago_id , t3.nombre tipo_pago FROM venta t
         inner join venta_tipo_pago t2 on t2.VentaID = t.VentaID 
         inner join tipo_pago t3 on t2.tipo_pago_id = t3.tipo_pago_id
         WHERE DATE(FechaVenta) BETWEEN ? AND ?`,
