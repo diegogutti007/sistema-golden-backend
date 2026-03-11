@@ -447,7 +447,7 @@ app.delete('/api/empleado/:id', (req, res) => {
 app.get('/api/citas', (req, res) => {
   const query = `
 	SELECT c.*, CONCAT(p.nombre, ' ', p.apellido) AS ClienteNombre, 
-  CONCAT(e.nombres, ' ', e.apellidos) AS EmpleadoNombre, v.Total
+  CONCAT(e.nombres, ' ', e.apellidos) AS EmpleadoNombre, v.Total Monto
     FROM citas c
     LEFT JOIN cliente p ON c.ClienteID = p.ClienteID
     LEFT JOIN empleado e ON c.EmpId = e.EmpId
@@ -475,7 +475,7 @@ app.get('/api/citas', (req, res) => {
         estado: r.Estado,
         clienteID: r.ClienteID,
         EmpId: r.EmpId,
-        Total: r.Total
+        Monto: r.Monto
       }
     }));
 
