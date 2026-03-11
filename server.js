@@ -1496,7 +1496,7 @@ app.get("/", (req, res) => {
   }
 }); */
 
-app.get('/api/venta', async (req, res) => {
+/* app.get('/api/venta', async (req, res) => {
   try {
     const { search, fechaInicio, fechaFin, page = 1, limit = 8 } = req.query;
 
@@ -1587,9 +1587,56 @@ app.get('/api/venta', async (req, res) => {
       detalles: error.message
     });
   }
+}); */
+
+app.get("/api/venta", (req, res) => {
+
+  const { search, fechaInicio, fechaFin } = req.query;
+
+  let where = "WHERE 1=1";
+  let params = [];
+
+  if (search) {
+    where += " AND CONCAT(c.Nombre,' ',c.Apellido) LIKE ?";
+    params.push(`%${search}%`);
+  }
+
+  if (fechaInicio) {
+    where += " AND DATE(v.FechaVenta) >= ?";
+    params.push(fechaInicio);
+  }
+
+  if (fechaFin) {
+    where += " AND DATE(v.FechaVenta) <= ?";
+    params.push(fechaFin);
+  }
+
+  const sql = `
+    SELECT 
+      v.VentaID,
+      v.FechaVenta,
+      v.Total,
+      v.Estado,
+      CONCAT(c.Nombre,' ',c.Apellido) as ClienteNombre
+    FROM venta v
+    LEFT JOIN cliente c ON c.ClienteID = v.ClienteID
+    ${where}
+    ORDER BY v.VentaID DESC
+  `;
+
+  pool.query(sql, params, (err, results) => {
+    if (err) {
+      console.error("Error ventas:", err);
+      return res.status(500).json({ error: "Error al cargar ventas" });
+    }
+
+    res.json({
+      ventas: results
+    });
+
+  });
+
 });
-
-
 
 
 
