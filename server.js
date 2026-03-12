@@ -749,7 +749,7 @@ app.get("/api/gastos/resumen-dia", (req, res) => {
 
 
 // En tu server.js - Endpoint corregido
-app.post("/api/cierre-caja", (req, res) => {
+ app.post("/api/cierre-caja", (req, res) => {
   const datos = req.body;
   console.log("💾 Guardando cierre de caja:", datos);
 
@@ -827,7 +827,7 @@ app.post("/api/cierre-caja", (req, res) => {
     });
   });
 });
-
+ 
 
 
 
@@ -872,7 +872,7 @@ app.get("/api/caja/dinero-inicial", (req, res) => {
 
 
 // En tu backend (ejemplo)
-app.get('/api/cierre-caja/verificar', async (req, res) => {
+/* app.get('/api/cierre-caja/verificar', async (req, res) => {
   try {
     const { fecha } = req.query;
 
@@ -898,48 +898,367 @@ app.get('/api/cierre-caja/verificar', async (req, res) => {
     res.status(500).json({ error: 'Error verificando cierre' });
   }
 });
+ */
+
+////////////////Cierre de Caja///////////////////////////7
+
+// ✅ Verificar si existe cierre de caja para una fecha específica
+// ✅ Verificar si existe cierre de caja para una fecha específica (CORREGIDO)
 
 
 
+// ✅ Crear nuevo cierre de caja
+// ✅ Crear nuevo cierre de caja (usando pool)
+// ✅ Verificar si existe cierre de caja para una fecha específica
+app.get("/api/cierre-caja/verificar", (req, res) => {
+  const { fecha } = req.query;
 
+  // Validar que se proporcionó fecha
+  if (!fecha) {
+    return res.status(400).json({ 
+      success: false,
+      error: "Se requiere el parámetro fecha" 
+    });
+  }
 
+  // Validar formato de fecha (YYYY-MM-DD)
+  const fechaRegex = /^\d{4}-\d{2}-\d{2}$/;
+  if (!fechaRegex.test(fecha)) {
+    return res.status(400).json({ 
+      success: false,
+      error: "Formato de fecha inválido. Use YYYY-MM-DD" 
+    });
+  }
 
-// ✅ Obtener citas filtradas para combo con búsqueda
-app.get("/api/citascombo", (req, res) => {
-  const { search = "" } = req.query; // parámetro opcional ?search=
+  console.log(`🔍 Verificando cierre para fecha: ${fecha}`);
 
   const sql = `
-    SELECT DISTINCT
-      c.CitaID, 
-      CONCAT(
-        DAY(c.FechaInicio), ' ',
-        ELT(MONTH(c.FechaInicio),
-          'Ene.', 'Feb.', 'Mar.', 'Abr.', 'May.', 'Jun.', 
-          'Jul.', 'Ago.', 'Sep.', 'Oct.', 'Nov.', 'Dic.'
-        ), 
-        ' ', DATE_FORMAT(c.FechaInicio, '%H:%i'),
-        ' - ', c.titulo
-      ) AS nombre,
-      c.ClienteID
-    FROM citas c
-    LEFT JOIN venta v ON c.CitaID = v.CitaID
-    WHERE v.VentaID IS NULL
-      AND c.ClienteID LIKE ?
-    LIMIT 15;
+    SELECT 
+      cierre_id as id,
+      fecha,
+      TIME_FORMAT(hora, '%H:%i') as hora,
+      responsable,
+      CAST(dinero_inicial AS DECIMAL(10,2)) as dinero_inicial,
+      CAST(dinero_final_caja AS DECIMAL(10,2)) as dinero_final_caja,
+      CAST(ventas_efectivo AS DECIMAL(10,2)) as ventas_efectivo,
+      CAST(ventas_yape AS DECIMAL(10,2)) as ventas_yape,
+      CAST(ventas_plin AS DECIMAL(10,2)) as ventas_plin,
+      CAST(ventas_tarjeta AS DECIMAL(10,2)) as ventas_tarjeta,
+      CAST(ventas_total AS DECIMAL(10,2)) as ventas_total,
+      CAST(total_gastos AS DECIMAL(10,2)) as total_gastos,
+      CAST(efectivo_esperado AS DECIMAL(10,2)) as efectivo_esperado,
+      CAST(diferencia AS DECIMAL(10,2)) as diferencia,
+      CAST(dinero_retirar AS DECIMAL(10,2)) as dinero_retirar,
+      estado,
+      fecha_creacion
+    FROM cierre_caja 
+    WHERE fecha = ? 
+    ORDER BY fecha_creacion DESC 
+    LIMIT 1
   `;
 
-  const filtro = `%${search}%`;
-
-  pool.query(sql, [filtro, filtro, filtro], (err, results) => {
+  pool.query(sql, [fecha], (err, results) => {
     if (err) {
-      console.error("❌ Error obteniendo Citas combo:", err);
-      return res.status(500).json({ error: "Error al obtener citas" });
+      console.error("❌ Error verificando cierre de caja:", err);
+      return res.status(500).json({ 
+        success: false,
+        error: "Error al verificar cierre de caja",
+        detalles: err.message
+      });
     }
-    res.json(results);
+
+    if (results.length > 0) {
+      const cierre = results[0];
+      
+      console.log(`✅ Cierre encontrado para fecha ${fecha}:`, {
+        id: cierre.id,
+        responsable: cierre.responsable,
+        estado: cierre.estado
+      });
+
+      return res.json({
+        success: true,
+        existe: true,
+        cierre: {
+          id: cierre.id,
+          fecha: cierre.fecha,
+          hora: cierre.hora,
+          responsable: cierre.responsable,
+          dinero_inicial: parseFloat(cierre.dinero_inicial),
+          dinero_final_caja: parseFloat(cierre.dinero_final_caja),
+          ventas_efectivo: parseFloat(cierre.ventas_efectivo),
+          ventas_yape: parseFloat(cierre.ventas_yape),
+          ventas_plin: parseFloat(cierre.ventas_plin),
+          ventas_tarjeta: parseFloat(cierre.ventas_tarjeta),
+          ventas_total: parseFloat(cierre.ventas_total),
+          total_gastos: parseFloat(cierre.total_gastos),
+          efectivo_esperado: parseFloat(cierre.efectivo_esperado),
+          diferencia: parseFloat(cierre.diferencia),
+          dinero_retirar: parseFloat(cierre.dinero_retirar),
+          estado: cierre.estado,
+          fecha_creacion: cierre.fecha_creacion
+        }
+      });
+    }
+
+    console.log(`📭 No se encontró cierre para fecha ${fecha}`);
+    
+    return res.json({
+      success: true,
+      existe: false,
+      cierre: null
+    });
   });
 });
 
+// ✅ Actualizar cierre de caja existente
+app.put("/api/cierre-caja/:id", (req, res) => {
+  const { id } = req.params;
+  const updateData = req.body;
 
+  // Construir la consulta dinámicamente
+  const fields = [];
+  const values = [];
+  const allowedFields = [
+    'fecha', 'hora', 'responsable', 'dinero_inicial', 'dinero_final_caja',
+    'ventas_efectivo', 'ventas_yape', 'ventas_plin', 'ventas_tarjeta',
+    'ventas_total', 'total_gastos', 'efectivo_esperado', 'diferencia',
+    'dinero_retirar', 'estado'
+  ];
+
+  allowedFields.forEach(field => {
+    if (updateData[field] !== undefined) {
+      fields.push(`${field} = ?`);
+      values.push(updateData[field]);
+    }
+  });
+
+  if (fields.length === 0) {
+    return res.status(400).json({ 
+      success: false,
+      error: "No hay campos para actualizar" 
+    });
+  }
+
+  // Agregar ID al final para el WHERE
+  values.push(id);
+
+  const sql = `
+    UPDATE cierre_caja 
+    SET ${fields.join(', ')}, fecha_modificacion = CURRENT_TIMESTAMP
+    WHERE cierre_id = ?
+  `;
+
+  console.log(`🔄 Actualizando cierre ID: ${id}`);
+
+  pool.query(sql, values, (err, result) => {
+    if (err) {
+      console.error("❌ Error actualizando cierre:", err);
+      
+      if (err.code === 'ER_DUP_ENTRY') {
+        return res.status(400).json({ 
+          success: false,
+          error: "Ya existe un cierre para esta fecha con este responsable" 
+        });
+      }
+
+      return res.status(500).json({ 
+        success: false,
+        error: "Error al actualizar cierre de caja" 
+      });
+    }
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ 
+        success: false,
+        error: "Cierre no encontrado" 
+      });
+    }
+
+    console.log(`✅ Cierre ${id} actualizado correctamente`);
+
+    res.json({
+      success: true,
+      message: "Cierre de caja actualizado exitosamente"
+    });
+  });
+});
+
+// ✅ Obtener un cierre específico por ID
+app.get("/api/cierre-caja/:id", (req, res) => {
+  const { id } = req.params;
+
+  const sql = `
+    SELECT 
+      cierre_id as id,
+      fecha,
+      TIME_FORMAT(hora, '%H:%i') as hora,
+      responsable,
+      CAST(dinero_inicial AS DECIMAL(10,2)) as dinero_inicial,
+      CAST(dinero_final_caja AS DECIMAL(10,2)) as dinero_final_caja,
+      CAST(ventas_efectivo AS DECIMAL(10,2)) as ventas_efectivo,
+      CAST(ventas_yape AS DECIMAL(10,2)) as ventas_yape,
+      CAST(ventas_plin AS DECIMAL(10,2)) as ventas_plin,
+      CAST(ventas_tarjeta AS DECIMAL(10,2)) as ventas_tarjeta,
+      CAST(ventas_total AS DECIMAL(10,2)) as ventas_total,
+      CAST(total_gastos AS DECIMAL(10,2)) as total_gastos,
+      CAST(efectivo_esperado AS DECIMAL(10,2)) as efectivo_esperado,
+      CAST(diferencia AS DECIMAL(10,2)) as diferencia,
+      CAST(dinero_retirar AS DECIMAL(10,2)) as dinero_retirar,
+      estado,
+      fecha_creacion
+    FROM cierre_caja 
+    WHERE cierre_id = ?
+  `;
+
+  pool.query(sql, [id], (err, results) => {
+    if (err) {
+      console.error("❌ Error obteniendo cierre:", err);
+      return res.status(500).json({ 
+        success: false,
+        error: "Error al obtener cierre de caja" 
+      });
+    }
+
+    if (results.length === 0) {
+      return res.status(404).json({ 
+        success: false,
+        error: "Cierre no encontrado" 
+      });
+    }
+
+    const cierre = results[0];
+    res.json({
+      success: true,
+      data: {
+        id: cierre.id,
+        fecha: cierre.fecha,
+        hora: cierre.hora,
+        responsable: cierre.responsable,
+        dinero_inicial: parseFloat(cierre.dinero_inicial),
+        dinero_final_caja: parseFloat(cierre.dinero_final_caja),
+        ventas_efectivo: parseFloat(cierre.ventas_efectivo),
+        ventas_yape: parseFloat(cierre.ventas_yape),
+        ventas_plin: parseFloat(cierre.ventas_plin),
+        ventas_tarjeta: parseFloat(cierre.ventas_tarjeta),
+        ventas_total: parseFloat(cierre.ventas_total),
+        total_gastos: parseFloat(cierre.total_gastos),
+        efectivo_esperado: parseFloat(cierre.efectivo_esperado),
+        diferencia: parseFloat(cierre.diferencia),
+        dinero_retirar: parseFloat(cierre.dinero_retirar),
+        estado: cierre.estado,
+        fecha_creacion: cierre.fecha_creacion
+      }
+    });
+  });
+});
+
+// ✅ Listar cierres con filtros opcionales
+app.get("/api/cierre-caja", (req, res) => {
+  const { 
+    fecha, 
+    responsable, 
+    estado,
+    fecha_inicio,
+    fecha_fin,
+    limit = 50,
+    page = 1
+  } = req.query;
+
+  let sql = "SELECT * FROM cierre_caja WHERE 1=1";
+  const params = [];
+  const conditions = [];
+
+  if (fecha) {
+    conditions.push("fecha = ?");
+    params.push(fecha);
+  }
+
+  if (responsable) {
+    conditions.push("responsable LIKE ?");
+    params.push(`%${responsable}%`);
+  }
+
+  if (estado) {
+    conditions.push("estado = ?");
+    params.push(estado);
+  }
+
+  if (fecha_inicio && fecha_fin) {
+    conditions.push("fecha BETWEEN ? AND ?");
+    params.push(fecha_inicio, fecha_fin);
+  }
+
+  if (conditions.length > 0) {
+    sql += " AND " + conditions.join(" AND ");
+  }
+
+  // Paginación
+  const offset = (page - 1) * limit;
+  sql += " ORDER BY fecha DESC, fecha_creacion DESC LIMIT ? OFFSET ?";
+  params.push(parseInt(limit), parseInt(offset));
+
+  pool.query(sql, params, (err, results) => {
+    if (err) {
+      console.error("❌ Error listando cierres:", err);
+      return res.status(500).json({ 
+        success: false,
+        error: "Error al listar cierres de caja" 
+      });
+    }
+
+    res.json({
+      success: true,
+      data: results,
+      pagination: {
+        page: parseInt(page),
+        limit: parseInt(limit)
+      }
+    });
+  });
+});
+
+// ✅ Eliminar cierre (con verificación de permisos)
+app.delete("/api/cierre-caja/:id", (req, res) => {
+  const { id } = req.params;
+  const { usuario_rol } = req.query; // O podrías obtenerlo de un token/sesión
+
+  // Solo admin puede eliminar
+  if (usuario_rol !== 'admin' && usuario_rol !== 'administrador') {
+    return res.status(403).json({ 
+      success: false,
+      error: "No tienes permisos para eliminar cierres" 
+    });
+  }
+
+  const sql = "DELETE FROM cierre_caja WHERE cierre_id = ?";
+
+  pool.query(sql, [id], (err, result) => {
+    if (err) {
+      console.error("❌ Error eliminando cierre:", err);
+      return res.status(500).json({ 
+        success: false,
+        error: "Error al eliminar cierre de caja" 
+      });
+    }
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ 
+        success: false,
+        error: "Cierre no encontrado" 
+      });
+    }
+
+    console.log(`🗑️ Cierre ${id} eliminado correctamente`);
+
+    res.json({
+      success: true,
+      message: "Cierre de caja eliminado exitosamente"
+    });
+  });
+});
+
+////////////////Cierre de Caja/////////////////////////////////////////////////////
 
 
 
