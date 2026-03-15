@@ -525,7 +525,244 @@ app.delete('/api/citas/:id', (req, res) => {
   });
 });
 
+//Articulo//////////////////////////////////////
 
+// Obtener todos los artículos
+router.get('/', (req, res) => {
+  const sql = 'SELECT * FROM articulo ORDER BY fecha_creacion DESC';
+  
+  db.query(sql, (err, resultados) => {
+    if (err) {
+      console.error("❌ Error obteniendo artículos:", err);
+      return res.status(500).json({ 
+        error: "Error obteniendo artículos",
+        detalles: err.message 
+      });
+    }
+    
+    console.log(`✅ ${resultados.length} artículos encontrados`);
+    res.json(resultados);
+  });
+});
+
+// Obtener un artículo por ID
+router.get('/:id', (req, res) => {
+  const { id } = req.params;
+  
+  const sql = 'SELECT * FROM articulo WHERE ArticuloID = ?';
+  
+  db.query(sql, [id], (err, resultados) => {
+    if (err) {
+      console.error("❌ Error obteniendo artículo:", err);
+      return res.status(500).json({ 
+        error: "Error obteniendo artículo",
+        detalles: err.message 
+      });
+    }
+    
+    if (resultados.length === 0) {
+      return res.status(404).json({ error: "Artículo no encontrado" });
+    }
+    
+    console.log(`✅ Artículo encontrado: ID ${id}`);
+    res.json(resultados[0]);
+  });
+});
+
+// Crear nuevo artículo
+router.post('/', (req, res) => {
+  const {
+    Codigo,
+    Nombre,
+    Descripcion,
+    PrecioCompra,
+    PrecioVenta,
+    Stock,
+    UnidadMedida,
+    CategoriaID,
+    Estado
+  } = req.body;
+
+  // Validar campos obligatorios
+  if (!Nombre || !PrecioVenta) {
+    return res.status(400).json({ 
+      error: "Campos obligatorios",
+      message: "El nombre y precio de venta son requeridos"
+    });
+  }
+
+  const sql = `
+    INSERT INTO articulo 
+    (Codigo, Nombre, Descripcion, PrecioCompra, PrecioVenta, Stock, UnidadMedida, CategoriaID, Estado) 
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `;
+
+  const valores = [
+    Codigo || null,
+    Nombre,
+    Descripcion || null,
+    PrecioCompra || 0.00,
+    PrecioVenta,
+    Stock || 0,
+    UnidadMedida || 'UND',
+    CategoriaID || null,
+    Estado || 'Activo'
+  ];
+
+  db.query(sql, valores, (err, resultado) => {
+    if (err) {
+      console.error("❌ Error creando artículo:", err);
+      
+      if (err.code === 'ER_DUP_ENTRY') {
+        return res.status(400).json({ 
+          error: "Código duplicado",
+          message: "El código ingresado ya existe en el sistema"
+        });
+      }
+      
+      return res.status(500).json({ 
+        error: "Error creando artículo",
+        detalles: err.message 
+      });
+    }
+
+    // Obtener el artículo recién creado
+    const selectSql = 'SELECT * FROM articulo WHERE ArticuloID = ?';
+    db.query(selectSql, [resultado.insertId], (err2, nuevoArticulo) => {
+      if (err2) {
+        console.error("❌ Error obteniendo artículo creado:", err2);
+        return res.status(201).json({ 
+          message: "Artículo creado, pero error al obtener datos",
+          id: resultado.insertId 
+        });
+      }
+      
+      console.log(`✅ Artículo creado: ID ${resultado.insertId}`);
+      res.status(201).json(nuevoArticulo[0]);
+    });
+  });
+});
+
+// Actualizar artículo
+router.put('/:id', (req, res) => {
+  const { id } = req.params;
+  const {
+    Codigo,
+    Nombre,
+    Descripcion,
+    PrecioCompra,
+    PrecioVenta,
+    Stock,
+    UnidadMedida,
+    CategoriaID,
+    Estado
+  } = req.body;
+
+  // Validar campos obligatorios
+  if (!Nombre || !PrecioVenta) {
+    return res.status(400).json({ 
+      error: "Campos obligatorios",
+      message: "El nombre y precio de venta son requeridos"
+    });
+  }
+
+  const sql = `
+    UPDATE articulo 
+    SET Codigo = ?, Nombre = ?, Descripcion = ?, PrecioCompra = ?, 
+        PrecioVenta = ?, Stock = ?, UnidadMedida = ?, CategoriaID = ?, Estado = ?
+    WHERE ArticuloID = ?
+  `;
+
+  const valores = [
+    Codigo || null,
+    Nombre,
+    Descripcion || null,
+    PrecioCompra || 0.00,
+    PrecioVenta,
+    Stock || 0,
+    UnidadMedida || 'UND',
+    CategoriaID || null,
+    Estado || 'Activo',
+    id
+  ];
+
+  db.query(sql, valores, (err, resultado) => {
+    if (err) {
+      console.error("❌ Error actualizando artículo:", err);
+      
+      if (err.code === 'ER_DUP_ENTRY') {
+        return res.status(400).json({ 
+          error: "Código duplicado",
+          message: "El código ingresado ya existe en el sistema"
+        });
+      }
+      
+      return res.status(500).json({ 
+        error: "Error actualizando artículo",
+        detalles: err.message 
+      });
+    }
+
+    if (resultado.affectedRows === 0) {
+      return res.status(404).json({ error: "Artículo no encontrado" });
+    }
+
+    // Obtener el artículo actualizado
+    const selectSql = 'SELECT * FROM articulo WHERE ArticuloID = ?';
+    db.query(selectSql, [id], (err2, articuloActualizado) => {
+      if (err2) {
+        console.error("❌ Error obteniendo artículo actualizado:", err2);
+        return res.json({ 
+          message: "Artículo actualizado, pero error al obtener datos",
+          id: id 
+        });
+      }
+      
+      console.log(`✅ Artículo actualizado: ID ${id}`);
+      res.json(articuloActualizado[0]);
+    });
+  });
+});
+
+// Eliminar artículo
+router.delete('/:id', (req, res) => {
+  const { id } = req.params;
+
+  // Primero verificar si el artículo existe
+  const checkSql = 'SELECT * FROM articulo WHERE ArticuloID = ?';
+  db.query(checkSql, [id], (err, resultados) => {
+    if (err) {
+      console.error("❌ Error verificando artículo:", err);
+      return res.status(500).json({ 
+        error: "Error al eliminar artículo",
+        detalles: err.message 
+      });
+    }
+
+    if (resultados.length === 0) {
+      return res.status(404).json({ error: "Artículo no encontrado" });
+    }
+
+    // Eliminar el artículo
+    const deleteSql = 'DELETE FROM articulo WHERE ArticuloID = ?';
+    db.query(deleteSql, [id], (err2, resultado) => {
+      if (err2) {
+        console.error("❌ Error eliminando artículo:", err2);
+        return res.status(500).json({ 
+          error: "Error eliminando artículo",
+          detalles: err2.message 
+        });
+      }
+
+      console.log(`✅ Artículo eliminado: ID ${id} - ${resultados[0].Nombre}`);
+      res.json({ 
+        message: "Artículo eliminado correctamente",
+        articulo: resultados[0]
+      });
+    });
+  });
+});
+///////////////////////////////////////////////
 
 
 // 🔹 Registrar una nueva venta (con pool y EmpID por detalle)
