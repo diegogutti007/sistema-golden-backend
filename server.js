@@ -1530,6 +1530,87 @@ app.post('/api/clientes', (req, res) => {
   });
 });
 
+// ✅ Actualizar cliente
+app.put('/api/clientes/:id', (req, res) => {
+  const { id } = req.params;
+  const { Nombre, Apellido, Telefono, Email } = req.body;
+  
+  // Validaciones básicas
+  if (!Nombre || !Apellido) {
+    return res.status(400).json({ error: 'Nombre y Apellido son requeridos' });
+  }
+
+  const query = `
+    UPDATE cliente
+    SET Nombre = ?, Apellido = ?, Telefono = ?, Email = ?
+    WHERE ClienteID = ?
+  `;
+  
+  pool.query(query, [Nombre.trim(), Apellido.trim(), Telefono || null, Email || null, id], (err, result) => {
+    if (err) {
+      console.error('Error al actualizar cliente:', err);
+      if (err.code === 'ER_DUP_ENTRY') {
+        return res.status(400).json({ error: 'El email ya está registrado' });
+      }
+      return res.status(500).json({ error: 'Error al actualizar cliente' });
+    }
+    
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: 'Cliente no encontrado' });
+    }
+    
+    // Obtener el cliente actualizado
+    const selectQuery = 'SELECT ClienteID, Nombre, Apellido, Telefono, Email FROM cliente WHERE ClienteID = ?';
+    pool.query(selectQuery, [id], (err2, results) => {
+      if (err2) {
+        return res.status(500).json({ error: 'Cliente actualizado pero error al obtener datos' });
+      }
+      res.json(results[0]);
+    });
+  });
+});
+
+// ✅ Eliminar cliente
+app.delete('/api/clientes/:id', (req, res) => {
+  const { id } = req.params;
+  
+  // Verificar si el cliente tiene citas asociadas (opcional, pero recomendado)
+  const checkQuery = 'SELECT COUNT(*) as count FROM citas WHERE ClienteID = ?';
+  pool.query(checkQuery, [id], (err, results) => {
+    if (err) {
+      console.error('Error al verificar citas del cliente:', err);
+      return res.status(500).json({ error: 'Error al verificar dependencias' });
+    }
+    
+    if (results[0].count > 0) {
+      return res.status(400).json({ 
+        error: 'No se puede eliminar el cliente porque tiene citas asociadas',
+        citasCount: results[0].count
+      });
+    }
+    
+    // Si no tiene citas, proceder con la eliminación
+    const deleteQuery = 'DELETE FROM cliente WHERE ClienteID = ?';
+    pool.query(deleteQuery, [id], (err2, result) => {
+      if (err2) {
+        console.error('Error al eliminar cliente:', err2);
+        return res.status(500).json({ error: 'Error al eliminar cliente' });
+      }
+      
+      if (result.affectedRows === 0) {
+        return res.status(404).json({ error: 'Cliente no encontrado' });
+      }
+      
+      res.json({ message: 'Cliente eliminado correctamente' });
+    });
+  });
+});
+
+
+
+
+
+
 ///////////////////Gastos/////////////////////////////////////////////////////////////
 app.post("/api/gastos", (req, res) => {
   const { descripcion, monto, categoria_id, periodo_id, fecha_gasto, observaciones, EmpId, pagos } = req.body;
@@ -1829,17 +1910,6 @@ app.get('/api/gastos/:id/pagos', (req, res) => {
     res.json(results);
   });
 });
-
-
-
-
-
-
-
-
-
-
-
 
 
 // ✅ Obtener categorias

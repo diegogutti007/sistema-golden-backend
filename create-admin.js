@@ -17,8 +17,8 @@ async function createAdminUser() {
 
     const [result] = await connection.execute(
       `INSERT INTO usuario (nombre, apellido, correo, contrasena, rol, estado, usuario) 
-       VALUES (?, ?, ?, ?, 'empleado', 'activo', 'colaborador')`,
-      ['Colaborador', 'Golden', 'colaborador@goldennails.com', hashedPassword]
+       VALUES (?, ?, ?, ?, 'admin', 'activo', 'yberetta')`,
+      ['Yessica', 'Beretta', 'yberetta@gmail.com', hashedPassword]
     );
 
     console.log('✅ Usuario admin creado exitosamente');
