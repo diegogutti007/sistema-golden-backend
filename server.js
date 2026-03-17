@@ -2243,7 +2243,8 @@ app.get("/api/venta", (req, res) => {
       v.FechaVenta,
       v.Total,
       v.Estado,
-      CONCAT(c.Nombre,' ',c.Apellido) as ClienteNombre
+      CONCAT(c.Nombre,' ',c.Apellido) as ClienteNombre,
+      v.Observaciones detalle
     FROM venta v
     LEFT JOIN cliente c ON c.ClienteID = v.ClienteID
     ${where}
