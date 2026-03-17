@@ -252,13 +252,580 @@ app.get('/api/test', (req, res) => {
 });
 
 
+const promisePool = pool.promise();
+
+// ============================================
+// FUNCIONES AUXILIARES (DEFINIDAS PRIMERO)
+// ============================================
+
+// Función para generar siguiente código de producto
+const generarSiguienteCodigoProducto = async () => {
+  try {
+    console.log("🔍 Buscando último código de producto...");
+    const [resultados] = await promisePool.query(
+      `SELECT Codigo FROM articulo 
+       WHERE Codigo LIKE 'PROD%' 
+       ORDER BY CAST(SUBSTRING(Codigo, 5) AS UNSIGNED) DESC 
+       LIMIT 1`
+    );
+
+    console.log("Último código de producto encontrado:", resultados);
+
+    if (resultados.length === 0 || !resultados[0]?.Codigo) {
+      console.log("📦 No hay productos, generando PROD001");
+      return 'PROD001';
+    }
+
+    const ultimoCodigo = resultados[0].Codigo;
+    const numeroStr = ultimoCodigo.substring(4);
+    const numero = parseInt(numeroStr, 10);
+
+    if (isNaN(numero)) {
+      console.log("⚠️ Código inválido, generando PROD001");
+      return 'PROD001';
+    }
+
+    const siguienteNumero = numero + 1;
+    const nuevoCodigo = `PROD${siguienteNumero.toString().padStart(3, '0')}`;
+    console.log(`✅ Nuevo código generado: ${nuevoCodigo}`);
+    return nuevoCodigo;
+  } catch (error) {
+    console.error("❌ Error generando código de producto:", error);
+    return 'PROD001';
+  }
+};
+
+// Función para generar siguiente código de servicio
+const generarSiguienteCodigoServicio = async () => {
+  try {
+    console.log("🔍 Buscando último código de servicio...");
+    const [resultados] = await promisePool.query(
+      `SELECT Codigo FROM articulo 
+       WHERE Codigo LIKE 'SERV%' 
+       ORDER BY CAST(SUBSTRING(Codigo, 5) AS UNSIGNED) DESC 
+       LIMIT 1`
+    );
+
+    console.log("Último código de servicio encontrado:", resultados);
+
+    if (resultados.length === 0 || !resultados[0]?.Codigo) {
+      console.log("📦 No hay servicios, generando SERV001");
+      return 'SERV001';
+    }
+
+    const ultimoCodigo = resultados[0].Codigo;
+    const numeroStr = ultimoCodigo.substring(4);
+    const numero = parseInt(numeroStr, 10);
+
+    if (isNaN(numero)) {
+      console.log("⚠️ Código inválido, generando SERV001");
+      return 'SERV001';
+    }
+
+    const siguienteNumero = numero + 1;
+    const nuevoCodigo = `SERV${siguienteNumero.toString().padStart(3, '0')}`;
+    console.log(`✅ Nuevo código generado: ${nuevoCodigo}`);
+    return nuevoCodigo;
+  } catch (error) {
+    console.error("❌ Error generando código de servicio:", error);
+    return 'SERV001';
+  }
+};
+
+// ============================================
+// ENDPOINTS PARA CATEGORÍAS
+// ============================================
+app.get('/api/categorias_servicio', async (req, res) => {
+  try {
+    const [resultados] = await promisePool.query(
+      'SELECT CategoriaID, Nombre, Descripcion FROM categoria ORDER BY Nombre'
+    );
+    res.json(resultados);
+  } catch (err) {
+    console.error("❌ Error obteniendo categorías:", err);
+    return res.status(500).json({
+      error: "Error obteniendo categorías",
+      detalles: err.message
+    });
+  }
+});
+// ============================================
+// ENDPOINTS PARA PRODUCTOS
+// ============================================
+
+// Obtener SOLO PRODUCTOS
+app.get('/api/productos', async (req, res) => {
+  try {
+    console.log("📦 Solicitando productos...");
+    const [resultados] = await promisePool.query(
+      `SELECT a.ArticuloID, a.Codigo, a.Nombre, a.Descripcion, 
+              a.PrecioCompra, a.PrecioVenta, a.Stock,
+              a.UnidadMedida, a.CategoriaID, a.Estado, a.fecha_creacion,
+              c.Nombre as CategoriaNombre 
+       FROM articulo a
+       LEFT JOIN categoria c ON a.CategoriaID = c.CategoriaID
+       WHERE a.Codigo LIKE 'PROD%' 
+       ORDER BY a.fecha_creacion DESC`
+    );
+
+    console.log(`✅ ${resultados.length} productos encontrados`);
+    res.json(resultados);
+  } catch (err) {
+    console.error("❌ Error obteniendo productos:", err);
+    return res.status(500).json({
+      error: "Error obteniendo productos",
+      detalles: err.message
+    });
+  }
+});
+
+// Crear nuevo PRODUCTO (sin StockMinimo)
+app.post('/api/productos', async (req, res) => {
+  try {
+    const {
+      Nombre,
+      Descripcion,
+      PrecioCompra,
+      PrecioVenta,
+      Stock,
+      UnidadMedida,
+      CategoriaID,
+      Estado
+    } = req.body;
+
+    console.log("📦 Recibiendo solicitud para crear producto:", req.body);
+
+    // Validar campos obligatorios
+    if (!Nombre || !PrecioVenta) {
+      return res.status(400).json({
+        error: "Campos obligatorios",
+        message: "El nombre y precio de venta son requeridos"
+      });
+    }
+
+    // Generar código automático
+    const codigoGenerado = await generarSiguienteCodigoProducto();
+    console.log("📦 Código generado:", codigoGenerado);
+
+    const [resultado] = await promisePool.query(
+      `INSERT INTO articulo 
+       (Codigo, Nombre, Descripcion, PrecioCompra, PrecioVenta, Stock, UnidadMedida, CategoriaID, Estado) 
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        codigoGenerado,
+        Nombre,
+        Descripcion || null,
+        PrecioCompra || 0.00,
+        PrecioVenta,
+        Stock || 0,
+        UnidadMedida || 'Unidad',
+        CategoriaID || null,
+        Estado || 'Activo'
+      ]
+    );
+
+    const [nuevoProducto] = await promisePool.query(
+      `SELECT a.*, c.Nombre as CategoriaNombre 
+       FROM articulo a
+       LEFT JOIN categoria c ON a.CategoriaID = c.CategoriaID
+       WHERE a.ArticuloID = ?`,
+      [resultado.insertId]
+    );
+
+    console.log(`✅ Producto creado: ID ${resultado.insertId} - Código: ${codigoGenerado}`);
+    res.status(201).json(nuevoProducto[0]);
+  } catch (err) {
+    console.error("❌ Error creando producto:", err);
+
+    if (err.code === 'ER_DUP_ENTRY') {
+      return res.status(400).json({
+        error: "Error de duplicado",
+        message: "Ocurrió un error al generar el código. Intente nuevamente."
+      });
+    }
+
+    return res.status(500).json({
+      error: "Error creando producto",
+      detalles: err.message
+    });
+  }
+});
+
+// Actualizar PRODUCTO (sin StockMinimo)
+app.put('/api/productos/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const {
+      Nombre,
+      Descripcion,
+      PrecioCompra,
+      PrecioVenta,
+      Stock,
+      UnidadMedida,
+      CategoriaID,
+      Estado
+    } = req.body;
+
+    console.log("📦 Actualizando producto ID:", id, req.body);
+
+    if (!Nombre || !PrecioVenta) {
+      return res.status(400).json({
+        error: "Campos obligatorios",
+        message: "El nombre y precio de venta son requeridos"
+      });
+    }
+
+    const [resultado] = await promisePool.query(
+      `UPDATE articulo 
+       SET Nombre = ?, Descripcion = ?, PrecioCompra = ?, 
+           PrecioVenta = ?, Stock = ?, UnidadMedida = ?, 
+           CategoriaID = ?, Estado = ?
+       WHERE ArticuloID = ? AND Codigo LIKE 'PROD%'`,
+      [
+        Nombre,
+        Descripcion || null,
+        PrecioCompra || 0.00,
+        PrecioVenta,
+        Stock || 0,
+        UnidadMedida || 'Unidad',
+        CategoriaID || null,
+        Estado || 'Activo',
+        id
+      ]
+    );
+
+    if (resultado.affectedRows === 0) {
+      return res.status(404).json({ error: "Producto no encontrado" });
+    }
+
+    const [productoActualizado] = await promisePool.query(
+      `SELECT a.*, c.Nombre as CategoriaNombre 
+       FROM articulo a
+       LEFT JOIN categoria c ON a.CategoriaID = c.CategoriaID
+       WHERE a.ArticuloID = ?`,
+      [id]
+    );
+
+    console.log(`✅ Producto actualizado: ID ${id}`);
+    res.json(productoActualizado[0]);
+  } catch (err) {
+    console.error("❌ Error actualizando producto:", err);
+    return res.status(500).json({
+      error: "Error actualizando producto",
+      detalles: err.message
+    });
+  }
+});
 
 
 
+// Eliminar PRODUCTO - VERSIÓN CORREGIDA
+app.delete('/api/productos/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    console.log("🗑️ Solicitando eliminar producto ID:", id);
+
+    // Validar que el ID sea un número
+    if (isNaN(id)) {
+      return res.status(400).json({
+        error: "ID inválido",
+        message: "El ID del producto debe ser un número"
+      });
+    }
+
+    // Primero verificar si el producto existe y es un producto (código PROD)
+    const [resultados] = await promisePool.query(
+      'SELECT * FROM articulo WHERE ArticuloID = ? AND Codigo LIKE "PROD%"',
+      [id]
+    );
+
+    if (resultados.length === 0) {
+      console.log("⚠️ Producto no encontrado con ID:", id);
+      return res.status(404).json({
+        error: "Producto no encontrado",
+        message: "No existe un producto con ese ID"
+      });
+    }
+
+    console.log("📦 Producto encontrado:", resultados[0]);
+
+    // Eliminar el producto
+    const [deleteResult] = await promisePool.query(
+      'DELETE FROM articulo WHERE ArticuloID = ?',
+      [id]
+    );
+
+    console.log("✅ Resultado de eliminación:", deleteResult);
+
+    if (deleteResult.affectedRows === 0) {
+      return res.status(500).json({
+        error: "Error al eliminar",
+        message: "No se pudo eliminar el producto"
+      });
+    }
+
+    console.log(`✅ Producto eliminado exitosamente: ID ${id} - ${resultados[0].Nombre}`);
+    res.json({
+      message: "Producto eliminado correctamente",
+      producto: resultados[0]
+    });
+  } catch (err) {
+    console.error("❌ Error eliminando producto:", err);
+
+    // Error de llave foránea (si el producto está siendo usado en otras tablas)
+    if (err.code === 'ER_ROW_IS_REFERENCED_2') {
+      return res.status(400).json({
+        error: "Producto en uso",
+        message: "No se puede eliminar el producto porque está siendo utilizado en otras partes del sistema"
+      });
+    }
+
+    return res.status(500).json({
+      error: "Error eliminando producto",
+      message: err.message,
+      detalles: err.sqlMessage || err.message
+    });
+  }
+});
 
 
+// ============================================
+// ENDPOINTS PARA SERVICIOS
+// ============================================
 
+// Obtener SOLO SERVICIOS
+app.get('/api/servicios', async (req, res) => {
+  try {
+    console.log("📦 Solicitando servicios...");
+    const [resultados] = await promisePool.query(
+      `SELECT a.ArticuloID, a.Codigo, a.Nombre, a.Descripcion, 
+              a.PrecioCompra, a.PrecioVenta, a.Stock,
+              a.UnidadMedida, a.CategoriaID, a.Estado, a.fecha_creacion,
+              c.Nombre as CategoriaNombre 
+       FROM articulo a
+       LEFT JOIN categoria c ON a.CategoriaID = c.CategoriaID
+       WHERE a.Codigo LIKE 'SERV%' 
+       ORDER BY a.fecha_creacion DESC`
+    );
 
+    console.log(`✅ ${resultados.length} servicios encontrados`);
+    res.json(resultados);
+  } catch (err) {
+    console.error("❌ Error obteniendo servicios:", err);
+    return res.status(500).json({
+      error: "Error obteniendo servicios",
+      detalles: err.message
+    });
+  }
+});
+
+// Crear nuevo SERVICIO (sin StockMinimo)
+app.post('/api/servicios', async (req, res) => {
+  try {
+    const {
+      Nombre,
+      Descripcion,
+      PrecioCompra,
+      PrecioVenta,
+      Stock,
+      UnidadMedida,
+      CategoriaID,
+      Estado
+    } = req.body;
+
+    console.log("📦 Recibiendo solicitud para crear servicio:", req.body);
+
+    if (!Nombre || !PrecioVenta) {
+      return res.status(400).json({
+        error: "Campos obligatorios",
+        message: "El nombre y precio de venta son requeridos"
+      });
+    }
+
+    // Generar código automático
+    const codigoGenerado = await generarSiguienteCodigoServicio();
+    console.log("📦 Código generado:", codigoGenerado);
+
+    const [resultado] = await promisePool.query(
+      `INSERT INTO articulo 
+       (Codigo, Nombre, Descripcion, PrecioCompra, PrecioVenta, Stock, UnidadMedida, CategoriaID, Estado) 
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        codigoGenerado,
+        Nombre,
+        Descripcion || null,
+        PrecioCompra || 0.00,
+        PrecioVenta,
+        Stock || 0,
+        UnidadMedida || 'Unidad',
+        CategoriaID || null,
+        Estado || 'Activo'
+      ]
+    );
+
+    const [nuevoServicio] = await promisePool.query(
+      `SELECT a.*, c.Nombre as CategoriaNombre 
+       FROM articulo a
+       LEFT JOIN categoria c ON a.CategoriaID = c.CategoriaID
+       WHERE a.ArticuloID = ?`,
+      [resultado.insertId]
+    );
+
+    console.log(`✅ Servicio creado: ID ${resultado.insertId} - Código: ${codigoGenerado}`);
+    res.status(201).json(nuevoServicio[0]);
+  } catch (err) {
+    console.error("❌ Error creando servicio:", err);
+
+    if (err.code === 'ER_DUP_ENTRY') {
+      return res.status(400).json({
+        error: "Error de duplicado",
+        message: "Ocurrió un error al generar el código. Intente nuevamente."
+      });
+    }
+
+    return res.status(500).json({
+      error: "Error creando servicio",
+      detalles: err.message
+    });
+  }
+});
+
+// Actualizar SERVICIO (sin StockMinimo)
+app.put('/api/servicios/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const {
+      Nombre,
+      Descripcion,
+      PrecioCompra,
+      PrecioVenta,
+      Stock,
+      UnidadMedida,
+      CategoriaID,
+      Estado
+    } = req.body;
+
+    console.log("📦 Actualizando servicio ID:", id, req.body);
+
+    if (!Nombre || !PrecioVenta) {
+      return res.status(400).json({
+        error: "Campos obligatorios",
+        message: "El nombre y precio de venta son requeridos"
+      });
+    }
+
+    const [resultado] = await promisePool.query(
+      `UPDATE articulo 
+       SET Nombre = ?, Descripcion = ?, PrecioCompra = ?, 
+           PrecioVenta = ?, Stock = ?, UnidadMedida = ?, 
+           CategoriaID = ?, Estado = ?
+       WHERE ArticuloID = ? AND Codigo LIKE 'SERV%'`,
+      [
+        Nombre,
+        Descripcion || null,
+        PrecioCompra || 0.00,
+        PrecioVenta,
+        Stock || 0,
+        UnidadMedida || 'Unidad',
+        CategoriaID || null,
+        Estado || 'Activo',
+        id
+      ]
+    );
+
+    if (resultado.affectedRows === 0) {
+      return res.status(404).json({ error: "Servicio no encontrado" });
+    }
+
+    const [servicioActualizado] = await promisePool.query(
+      `SELECT a.*, c.Nombre as CategoriaNombre 
+       FROM articulo a
+       LEFT JOIN categoria c ON a.CategoriaID = c.CategoriaID
+       WHERE a.ArticuloID = ?`,
+      [id]
+    );
+
+    console.log(`✅ Servicio actualizado: ID ${id}`);
+    res.json(servicioActualizado[0]);
+  } catch (err) {
+    console.error("❌ Error actualizando servicio:", err);
+    return res.status(500).json({
+      error: "Error actualizando servicio",
+      detalles: err.message
+    });
+  }
+});
+
+// Eliminar SERVICIO - VERSIÓN CORREGIDA
+app.delete('/api/servicios/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    console.log("🗑️ Solicitando eliminar servicio ID:", id);
+
+    // Validar que el ID sea un número
+    if (isNaN(id)) {
+      return res.status(400).json({
+        error: "ID inválido",
+        message: "El ID del servicio debe ser un número"
+      });
+    }
+
+    // Primero verificar si el servicio existe y es un servicio (código SERV)
+    const [resultados] = await promisePool.query(
+      'SELECT * FROM articulo WHERE ArticuloID = ? AND Codigo LIKE "SERV%"',
+      [id]
+    );
+
+    if (resultados.length === 0) {
+      console.log("⚠️ Servicio no encontrado con ID:", id);
+      return res.status(404).json({
+        error: "Servicio no encontrado",
+        message: "No existe un servicio con ese ID"
+      });
+    }
+
+    console.log("📦 Servicio encontrado:", resultados[0]);
+
+    // Eliminar el servicio
+    const [deleteResult] = await promisePool.query(
+      'DELETE FROM articulo WHERE ArticuloID = ?',
+      [id]
+    );
+
+    console.log("✅ Resultado de eliminación:", deleteResult);
+
+    if (deleteResult.affectedRows === 0) {
+      return res.status(500).json({
+        error: "Error al eliminar",
+        message: "No se pudo eliminar el servicio"
+      });
+    }
+
+    console.log(`✅ Servicio eliminado exitosamente: ID ${id} - ${resultados[0].Nombre}`);
+    res.json({
+      message: "Servicio eliminado correctamente",
+      servicio: resultados[0]
+    });
+  } catch (err) {
+    console.error("❌ Error eliminando servicio:", err);
+
+    // Error de llave foránea (si el servicio está siendo usado en otras tablas)
+    if (err.code === 'ER_ROW_IS_REFERENCED_2') {
+      return res.status(400).json({
+        error: "Servicio en uso",
+        message: "No se puede eliminar el servicio porque está siendo utilizado en otras partes del sistema"
+      });
+    }
+
+    return res.status(500).json({
+      error: "Error eliminando servicio",
+      message: err.message,
+      detalles: err.sqlMessage || err.message
+    });
+  }
+});
 
 
 ///////////////////Empleados/////////////////////////////////////////////////////////////
@@ -530,16 +1097,16 @@ app.delete('/api/citas/:id', (req, res) => {
 // Obtener todos los artículos
 router.get('/', (req, res) => {
   const sql = 'SELECT * FROM articulo ORDER BY fecha_creacion DESC';
-  
+
   db.query(sql, (err, resultados) => {
     if (err) {
       console.error("❌ Error obteniendo artículos:", err);
-      return res.status(500).json({ 
+      return res.status(500).json({
         error: "Error obteniendo artículos",
-        detalles: err.message 
+        detalles: err.message
       });
     }
-    
+
     console.log(`✅ ${resultados.length} artículos encontrados`);
     res.json(resultados);
   });
@@ -548,22 +1115,22 @@ router.get('/', (req, res) => {
 // Obtener un artículo por ID
 router.get('/:id', (req, res) => {
   const { id } = req.params;
-  
+
   const sql = 'SELECT * FROM articulo WHERE ArticuloID = ?';
-  
+
   db.query(sql, [id], (err, resultados) => {
     if (err) {
       console.error("❌ Error obteniendo artículo:", err);
-      return res.status(500).json({ 
+      return res.status(500).json({
         error: "Error obteniendo artículo",
-        detalles: err.message 
+        detalles: err.message
       });
     }
-    
+
     if (resultados.length === 0) {
       return res.status(404).json({ error: "Artículo no encontrado" });
     }
-    
+
     console.log(`✅ Artículo encontrado: ID ${id}`);
     res.json(resultados[0]);
   });
@@ -585,7 +1152,7 @@ router.post('/', (req, res) => {
 
   // Validar campos obligatorios
   if (!Nombre || !PrecioVenta) {
-    return res.status(400).json({ 
+    return res.status(400).json({
       error: "Campos obligatorios",
       message: "El nombre y precio de venta son requeridos"
     });
@@ -612,17 +1179,17 @@ router.post('/', (req, res) => {
   db.query(sql, valores, (err, resultado) => {
     if (err) {
       console.error("❌ Error creando artículo:", err);
-      
+
       if (err.code === 'ER_DUP_ENTRY') {
-        return res.status(400).json({ 
+        return res.status(400).json({
           error: "Código duplicado",
           message: "El código ingresado ya existe en el sistema"
         });
       }
-      
-      return res.status(500).json({ 
+
+      return res.status(500).json({
         error: "Error creando artículo",
-        detalles: err.message 
+        detalles: err.message
       });
     }
 
@@ -631,12 +1198,12 @@ router.post('/', (req, res) => {
     db.query(selectSql, [resultado.insertId], (err2, nuevoArticulo) => {
       if (err2) {
         console.error("❌ Error obteniendo artículo creado:", err2);
-        return res.status(201).json({ 
+        return res.status(201).json({
           message: "Artículo creado, pero error al obtener datos",
-          id: resultado.insertId 
+          id: resultado.insertId
         });
       }
-      
+
       console.log(`✅ Artículo creado: ID ${resultado.insertId}`);
       res.status(201).json(nuevoArticulo[0]);
     });
@@ -660,7 +1227,7 @@ router.put('/:id', (req, res) => {
 
   // Validar campos obligatorios
   if (!Nombre || !PrecioVenta) {
-    return res.status(400).json({ 
+    return res.status(400).json({
       error: "Campos obligatorios",
       message: "El nombre y precio de venta son requeridos"
     });
@@ -689,17 +1256,17 @@ router.put('/:id', (req, res) => {
   db.query(sql, valores, (err, resultado) => {
     if (err) {
       console.error("❌ Error actualizando artículo:", err);
-      
+
       if (err.code === 'ER_DUP_ENTRY') {
-        return res.status(400).json({ 
+        return res.status(400).json({
           error: "Código duplicado",
           message: "El código ingresado ya existe en el sistema"
         });
       }
-      
-      return res.status(500).json({ 
+
+      return res.status(500).json({
         error: "Error actualizando artículo",
-        detalles: err.message 
+        detalles: err.message
       });
     }
 
@@ -712,12 +1279,12 @@ router.put('/:id', (req, res) => {
     db.query(selectSql, [id], (err2, articuloActualizado) => {
       if (err2) {
         console.error("❌ Error obteniendo artículo actualizado:", err2);
-        return res.json({ 
+        return res.json({
           message: "Artículo actualizado, pero error al obtener datos",
-          id: id 
+          id: id
         });
       }
-      
+
       console.log(`✅ Artículo actualizado: ID ${id}`);
       res.json(articuloActualizado[0]);
     });
@@ -733,9 +1300,9 @@ router.delete('/:id', (req, res) => {
   db.query(checkSql, [id], (err, resultados) => {
     if (err) {
       console.error("❌ Error verificando artículo:", err);
-      return res.status(500).json({ 
+      return res.status(500).json({
         error: "Error al eliminar artículo",
-        detalles: err.message 
+        detalles: err.message
       });
     }
 
@@ -748,14 +1315,14 @@ router.delete('/:id', (req, res) => {
     db.query(deleteSql, [id], (err2, resultado) => {
       if (err2) {
         console.error("❌ Error eliminando artículo:", err2);
-        return res.status(500).json({ 
+        return res.status(500).json({
           error: "Error eliminando artículo",
-          detalles: err2.message 
+          detalles: err2.message
         });
       }
 
       console.log(`✅ Artículo eliminado: ID ${id} - ${resultados[0].Nombre}`);
-      res.json({ 
+      res.json({
         message: "Artículo eliminado correctamente",
         articulo: resultados[0]
       });
@@ -986,7 +1553,7 @@ app.get("/api/gastos/resumen-dia", (req, res) => {
 
 
 // En tu server.js - Endpoint corregido
- app.post("/api/cierre-caja", (req, res) => {
+app.post("/api/cierre-caja", (req, res) => {
   const datos = req.body;
   console.log("💾 Guardando cierre de caja:", datos);
 
@@ -1064,7 +1631,7 @@ app.get("/api/gastos/resumen-dia", (req, res) => {
     });
   });
 });
- 
+
 
 
 
@@ -1152,18 +1719,18 @@ app.get("/api/cierre-caja/verificar", (req, res) => {
 
   // Validar que se proporcionó fecha
   if (!fecha) {
-    return res.status(400).json({ 
+    return res.status(400).json({
       success: false,
-      error: "Se requiere el parámetro fecha" 
+      error: "Se requiere el parámetro fecha"
     });
   }
 
   // Validar formato de fecha (YYYY-MM-DD)
   const fechaRegex = /^\d{4}-\d{2}-\d{2}$/;
   if (!fechaRegex.test(fecha)) {
-    return res.status(400).json({ 
+    return res.status(400).json({
       success: false,
-      error: "Formato de fecha inválido. Use YYYY-MM-DD" 
+      error: "Formato de fecha inválido. Use YYYY-MM-DD"
     });
   }
 
@@ -1197,7 +1764,7 @@ app.get("/api/cierre-caja/verificar", (req, res) => {
   pool.query(sql, [fecha], (err, results) => {
     if (err) {
       console.error("❌ Error verificando cierre de caja:", err);
-      return res.status(500).json({ 
+      return res.status(500).json({
         success: false,
         error: "Error al verificar cierre de caja",
         detalles: err.message
@@ -1206,7 +1773,7 @@ app.get("/api/cierre-caja/verificar", (req, res) => {
 
     if (results.length > 0) {
       const cierre = results[0];
-      
+
       console.log(`✅ Cierre encontrado para fecha ${fecha}:`, {
         id: cierre.id,
         responsable: cierre.responsable,
@@ -1239,7 +1806,7 @@ app.get("/api/cierre-caja/verificar", (req, res) => {
     }
 
     console.log(`📭 No se encontró cierre para fecha ${fecha}`);
-    
+
     return res.json({
       success: true,
       existe: false,
@@ -1271,9 +1838,9 @@ app.put("/api/cierre-caja/:id", (req, res) => {
   });
 
   if (fields.length === 0) {
-    return res.status(400).json({ 
+    return res.status(400).json({
       success: false,
-      error: "No hay campos para actualizar" 
+      error: "No hay campos para actualizar"
     });
   }
 
@@ -1291,24 +1858,24 @@ app.put("/api/cierre-caja/:id", (req, res) => {
   pool.query(sql, values, (err, result) => {
     if (err) {
       console.error("❌ Error actualizando cierre:", err);
-      
+
       if (err.code === 'ER_DUP_ENTRY') {
-        return res.status(400).json({ 
+        return res.status(400).json({
           success: false,
-          error: "Ya existe un cierre para esta fecha con este responsable" 
+          error: "Ya existe un cierre para esta fecha con este responsable"
         });
       }
 
-      return res.status(500).json({ 
+      return res.status(500).json({
         success: false,
-        error: "Error al actualizar cierre de caja" 
+        error: "Error al actualizar cierre de caja"
       });
     }
 
     if (result.affectedRows === 0) {
-      return res.status(404).json({ 
+      return res.status(404).json({
         success: false,
-        error: "Cierre no encontrado" 
+        error: "Cierre no encontrado"
       });
     }
 
@@ -1351,16 +1918,16 @@ app.get("/api/cierre-caja/:id", (req, res) => {
   pool.query(sql, [id], (err, results) => {
     if (err) {
       console.error("❌ Error obteniendo cierre:", err);
-      return res.status(500).json({ 
+      return res.status(500).json({
         success: false,
-        error: "Error al obtener cierre de caja" 
+        error: "Error al obtener cierre de caja"
       });
     }
 
     if (results.length === 0) {
-      return res.status(404).json({ 
+      return res.status(404).json({
         success: false,
-        error: "Cierre no encontrado" 
+        error: "Cierre no encontrado"
       });
     }
 
@@ -1392,9 +1959,9 @@ app.get("/api/cierre-caja/:id", (req, res) => {
 
 // ✅ Listar cierres con filtros opcionales
 app.get("/api/cierre-caja", (req, res) => {
-  const { 
-    fecha, 
-    responsable, 
+  const {
+    fecha,
+    responsable,
     estado,
     fecha_inicio,
     fecha_fin,
@@ -1438,9 +2005,9 @@ app.get("/api/cierre-caja", (req, res) => {
   pool.query(sql, params, (err, results) => {
     if (err) {
       console.error("❌ Error listando cierres:", err);
-      return res.status(500).json({ 
+      return res.status(500).json({
         success: false,
-        error: "Error al listar cierres de caja" 
+        error: "Error al listar cierres de caja"
       });
     }
 
@@ -1462,9 +2029,9 @@ app.delete("/api/cierre-caja/:id", (req, res) => {
 
   // Solo admin puede eliminar
   if (usuario_rol !== 'admin' && usuario_rol !== 'administrador') {
-    return res.status(403).json({ 
+    return res.status(403).json({
       success: false,
-      error: "No tienes permisos para eliminar cierres" 
+      error: "No tienes permisos para eliminar cierres"
     });
   }
 
@@ -1473,16 +2040,16 @@ app.delete("/api/cierre-caja/:id", (req, res) => {
   pool.query(sql, [id], (err, result) => {
     if (err) {
       console.error("❌ Error eliminando cierre:", err);
-      return res.status(500).json({ 
+      return res.status(500).json({
         success: false,
-        error: "Error al eliminar cierre de caja" 
+        error: "Error al eliminar cierre de caja"
       });
     }
 
     if (result.affectedRows === 0) {
-      return res.status(404).json({ 
+      return res.status(404).json({
         success: false,
-        error: "Cierre no encontrado" 
+        error: "Cierre no encontrado"
       });
     }
 
@@ -1534,7 +2101,7 @@ app.post('/api/clientes', (req, res) => {
 app.put('/api/clientes/:id', (req, res) => {
   const { id } = req.params;
   const { Nombre, Apellido, Telefono, Email } = req.body;
-  
+
   // Validaciones básicas
   if (!Nombre || !Apellido) {
     return res.status(400).json({ error: 'Nombre y Apellido son requeridos' });
@@ -1545,7 +2112,7 @@ app.put('/api/clientes/:id', (req, res) => {
     SET Nombre = ?, Apellido = ?, Telefono = ?, Email = ?
     WHERE ClienteID = ?
   `;
-  
+
   pool.query(query, [Nombre.trim(), Apellido.trim(), Telefono || null, Email || null, id], (err, result) => {
     if (err) {
       console.error('Error al actualizar cliente:', err);
@@ -1554,11 +2121,11 @@ app.put('/api/clientes/:id', (req, res) => {
       }
       return res.status(500).json({ error: 'Error al actualizar cliente' });
     }
-    
+
     if (result.affectedRows === 0) {
       return res.status(404).json({ error: 'Cliente no encontrado' });
     }
-    
+
     // Obtener el cliente actualizado
     const selectQuery = 'SELECT ClienteID, Nombre, Apellido, Telefono, Email FROM cliente WHERE ClienteID = ?';
     pool.query(selectQuery, [id], (err2, results) => {
@@ -1573,7 +2140,7 @@ app.put('/api/clientes/:id', (req, res) => {
 // ✅ Eliminar cliente
 app.delete('/api/clientes/:id', (req, res) => {
   const { id } = req.params;
-  
+
   // Verificar si el cliente tiene citas asociadas (opcional, pero recomendado)
   const checkQuery = 'SELECT COUNT(*) as count FROM citas WHERE ClienteID = ?';
   pool.query(checkQuery, [id], (err, results) => {
@@ -1581,14 +2148,14 @@ app.delete('/api/clientes/:id', (req, res) => {
       console.error('Error al verificar citas del cliente:', err);
       return res.status(500).json({ error: 'Error al verificar dependencias' });
     }
-    
+
     if (results[0].count > 0) {
-      return res.status(400).json({ 
+      return res.status(400).json({
         error: 'No se puede eliminar el cliente porque tiene citas asociadas',
         citasCount: results[0].count
       });
     }
-    
+
     // Si no tiene citas, proceder con la eliminación
     const deleteQuery = 'DELETE FROM cliente WHERE ClienteID = ?';
     pool.query(deleteQuery, [id], (err2, result) => {
@@ -1596,11 +2163,11 @@ app.delete('/api/clientes/:id', (req, res) => {
         console.error('Error al eliminar cliente:', err2);
         return res.status(500).json({ error: 'Error al eliminar cliente' });
       }
-      
+
       if (result.affectedRows === 0) {
         return res.status(404).json({ error: 'Cliente no encontrado' });
       }
-      
+
       res.json({ message: 'Cliente eliminado correctamente' });
     });
   });
