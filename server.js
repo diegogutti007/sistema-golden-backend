@@ -828,566 +828,6 @@ app.delete('/api/servicios/:id', async (req, res) => {
 });
 
 
-// ============================================
-// CONFIGURACIÓN DE UBICACIÓN DE LA EMPRESA
-// ============================================
-const EMPRESA_CONFIG = {
-  nombre: 'Golden Nails',
-  direccion: 'Avenida los Pajuiles, Trujillo 13009, Perú',
-  coordenadas: {
-    latitud: -8.128544932138585,  // Reemplaza con la latitud de tu local
-    longitud: -79.04263471792805   // Reemplaza con la longitud de tu local
-  },
-  radioPermitido: 50, // metros
-  wifiPermitidos: [
-    'GOLDEN NAILS 2.4G',
-    'GOLDEN NAILS 5G'
-  ],
-  ipRedLocal: ['192.168.1.1', '10.0.', '172.16.']
-};
-
-// ============================================
-// FUNCIÓN PARA CALCULAR DISTANCIA
-// ============================================
-const calcularDistancia = (lat1, lon1, lat2, lon2) => {
-  const R = 6371e3;
-  const φ1 = lat1 * Math.PI / 180;
-  const φ2 = lat2 * Math.PI / 180;
-  const Δφ = (lat2 - lat1) * Math.PI / 180;
-  const Δλ = (lon2 - lon1) * Math.PI / 180;
-
-  const a = Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
-    Math.cos(φ1) * Math.cos(φ2) *
-    Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-
-  return R * c;
-};
-
-// Endpoint de prueba público
-app.get('/api/ping', (req, res) => {
-  res.json({
-    message: 'pong',
-    timestamp: new Date().toISOString(),
-    status: 'OK'
-  });
-});
-
-
-// ============================================
-// MIDDLEWARE DE VALIDACIÓN DE UBICACIÓN
-// ============================================
-const validarUbicacionMarcacion = async (req, res, next) => {
-  try {
-    const { latitud, longitud, wifiSSID } = req.body;
-    const ipCliente = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
-
-    console.log("📍 Validando ubicación:", { ip: ipCliente, wifiSSID, latitud, longitud });
-
-    // Opción 1: Validar por WiFi
-    if (wifiSSID && EMPRESA_CONFIG.wifiPermitidos.includes(wifiSSID)) {
-      console.log("✅ WiFi válido:", wifiSSID);
-      req.ubicacionValida = {
-        valida: true,
-        metodo: 'wifi',
-        wifiSSID,
-        ip: ipCliente
-      };
-      return next();
-    }
-
-    // Opción 2: Validar por IP de red local
-    if (ipCliente && EMPRESA_CONFIG.ipRedLocal.some(red => ipCliente.includes(red))) {
-      console.log("✅ IP de red local válida:", ipCliente);
-      req.ubicacionValida = {
-        valida: true,
-        metodo: 'ip_local',
-        ip: ipCliente
-      };
-      return next();
-    }
-
-    // Opción 3: Validar por geolocalización
-    if (latitud && longitud) {
-      const distancia = calcularDistancia(
-        parseFloat(latitud),
-        parseFloat(longitud),
-        EMPRESA_CONFIG.coordenadas.latitud,
-        EMPRESA_CONFIG.coordenadas.longitud
-      );
-
-      console.log(`📍 Distancia al local: ${distancia.toFixed(2)} metros`);
-
-      if (distancia <= EMPRESA_CONFIG.radioPermitido) {
-        req.ubicacionValida = {
-          valida: true,
-          metodo: 'gps',
-          distancia: distancia.toFixed(2)
-        };
-        return next();
-      } else {
-        return res.status(403).json({
-          error: 'Ubicación no válida',
-          message: `Debes estar en el local para marcar. Distancia actual: ${distancia.toFixed(2)} metros`
-        });
-      }
-    }
-
-    return res.status(403).json({
-      error: 'Acceso denegado',
-      message: 'No estás en la ubicación autorizada. Conéctate al WiFi de la empresa o acércate al local.'
-    });
-
-  } catch (error) {
-    console.error("❌ Error validando ubicación:", error);
-    return res.status(500).json({
-      error: 'Error validando ubicación',
-      message: error.message
-    });
-  }
-};
-
-// ============================================
-// ENDPOINTS DE MARCADO
-// ============================================
-
-// Marcar entrada
-app.post('/api/marcaciones/entrada', validarUbicacionMarcacion, async (req, res) => {
-  try {
-    const { codigo_empleado, dispositivo } = req.body;
-    const fecha = new Date().toISOString().split('T')[0];
-    const hora = new Date().toTimeString().split(' ')[0];
-    const ipCliente = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
-
-    console.log("📝 Registrando entrada:", { codigo_empleado, fecha, hora });
-
-    // Buscar empleado por DocID (cédula) o podrías agregar un campo Codigo
-    const [empleado] = await promisePool.query(
-      `SELECT EmpId, Nombres, Apellidos, DocID 
-             FROM empleado 
-             WHERE DocID = ? AND fecha_renuncia IS NULL`,
-      [codigo_empleado]
-    );
-
-    if (empleado.length === 0) {
-      return res.status(404).json({
-        error: 'Empleado no encontrado',
-        message: 'Código de empleado inválido o empleado inactivo'
-      });
-    }
-
-    const empId = empleado[0].EmpId;
-
-    // Verificar si ya tiene registro hoy
-    const [asistencia] = await promisePool.query(
-      'SELECT AsistenciaID FROM asistencia WHERE EmpId = ? AND Fecha = ?',
-      [empId, fecha]
-    );
-
-    if (asistencia.length > 0) {
-      return res.status(400).json({
-        error: 'Registro duplicado',
-        message: 'Ya marcaste entrada hoy'
-      });
-    }
-
-    await promisePool.query('START TRANSACTION');
-
-    // Crear nuevo registro
-    await promisePool.query(
-      `INSERT INTO asistencia 
-             (EmpId, Fecha, HoraEntrada, Estado, MetodoValidacion, IPAddress) 
-             VALUES (?, ?, ?, 'Incompleto', ?, ?)`,
-      [empId, fecha, hora, req.ubicacionValida.metodo, ipCliente]
-    );
-
-    // Registrar en historial
-    await promisePool.query(
-      `INSERT INTO historial_marcaciones 
-             (EmpId, FechaHora, Tipo, IPAddress, Dispositivo, MetodoValidacion, DatosValidacion) 
-             VALUES (?, NOW(), 'Entrada', ?, ?, ?, ?)`,
-      [
-        empId,
-        ipCliente,
-        dispositivo || 'web',
-        req.ubicacionValida.metodo,
-        JSON.stringify(req.ubicacionValida)
-      ]
-    );
-
-    await promisePool.query('COMMIT');
-
-    console.log(`✅ Entrada registrada: ${empleado[0].Nombres} ${empleado[0].Apellidos} - ${hora}`);
-
-    res.json({
-      success: true,
-      message: 'Entrada registrada correctamente',
-      empleado: `${empleado[0].Nombres} ${empleado[0].Apellidos}`,
-      hora,
-      metodo: req.ubicacionValida.metodo
-    });
-
-  } catch (error) {
-    await promisePool.query('ROLLBACK');
-    console.error("❌ Error registrando entrada:", error);
-    res.status(500).json({
-      error: 'Error al registrar entrada',
-      message: error.message
-    });
-  }
-});
-
-// Marcar salida a almuerzo
-app.post('/api/marcaciones/salida-almuerzo', validarUbicacionMarcacion, async (req, res) => {
-  try {
-    const { codigo_empleado, dispositivo } = req.body;
-    const fecha = new Date().toISOString().split('T')[0];
-    const hora = new Date().toTimeString().split(' ')[0];
-    const ipCliente = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
-
-    const [empleado] = await promisePool.query(
-      'SELECT EmpId, Nombres, Apellidos FROM empleado WHERE DocID = ?',
-      [codigo_empleado]
-    );
-
-    if (empleado.length === 0) {
-      return res.status(404).json({ error: 'Empleado no encontrado' });
-    }
-
-    const empId = empleado[0].EmpId;
-
-    // Verificar registro de hoy
-    const [asistencia] = await promisePool.query(
-      `SELECT * FROM asistencia 
-             WHERE EmpId = ? AND Fecha = ?`,
-      [empId, fecha]
-    );
-
-    if (asistencia.length === 0) {
-      return res.status(400).json({
-        error: 'Registro no encontrado',
-        message: 'Debes marcar entrada primero'
-      });
-    }
-
-    if (asistencia[0].HoraSalidaAlmuerzo) {
-      return res.status(400).json({
-        error: 'Registro duplicado',
-        message: 'Ya marcaste salida a almuerzo hoy'
-      });
-    }
-
-    await promisePool.query('START TRANSACTION');
-
-    // Actualizar registro
-    await promisePool.query(
-      `UPDATE asistencia 
-             SET HoraSalidaAlmuerzo = ?, MetodoValidacion = ? 
-             WHERE EmpId = ? AND Fecha = ?`,
-      [hora, req.ubicacionValida.metodo, empId, fecha]
-    );
-
-    // Registrar en historial
-    await promisePool.query(
-      `INSERT INTO historial_marcaciones 
-             (EmpId, FechaHora, Tipo, IPAddress, Dispositivo, MetodoValidacion, DatosValidacion) 
-             VALUES (?, NOW(), 'SalidaAlmuerzo', ?, ?, ?, ?)`,
-      [
-        empId,
-        ipCliente,
-        dispositivo || 'web',
-        req.ubicacionValida.metodo,
-        JSON.stringify(req.ubicacionValida)
-      ]
-    );
-
-    await promisePool.query('COMMIT');
-
-    res.json({
-      success: true,
-      message: 'Salida a almuerzo registrada',
-      hora,
-      metodo: req.ubicacionValida.metodo
-    });
-
-  } catch (error) {
-    await promisePool.query('ROLLBACK');
-    console.error(error);
-    res.status(500).json({ error: 'Error al registrar salida a almuerzo' });
-  }
-});
-
-// Marcar regreso de almuerzo
-app.post('/api/marcaciones/regreso-almuerzo', validarUbicacionMarcacion, async (req, res) => {
-  try {
-    const { codigo_empleado, dispositivo } = req.body;
-    const fecha = new Date().toISOString().split('T')[0];
-    const hora = new Date().toTimeString().split(' ')[0];
-    const ipCliente = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
-
-    const [empleado] = await promisePool.query(
-      'SELECT EmpId FROM empleado WHERE DocID = ?',
-      [codigo_empleado]
-    );
-
-    if (empleado.length === 0) {
-      return res.status(404).json({ error: 'Empleado no encontrado' });
-    }
-
-    const empId = empleado[0].EmpId;
-
-    const [asistencia] = await promisePool.query(
-      `SELECT * FROM asistencia 
-             WHERE EmpId = ? AND Fecha = ?`,
-      [empId, fecha]
-    );
-
-    if (asistencia.length === 0) {
-      return res.status(400).json({
-        error: 'Registro no encontrado',
-        message: 'Debes marcar entrada primero'
-      });
-    }
-
-    if (!asistencia[0].HoraSalidaAlmuerzo) {
-      return res.status(400).json({
-        error: 'Secuencia incorrecta',
-        message: 'Debes marcar salida a almuerzo primero'
-      });
-    }
-
-    if (asistencia[0].HoraRegresoAlmuerzo) {
-      return res.status(400).json({
-        error: 'Registro duplicado',
-        message: 'Ya marcaste regreso de almuerzo hoy'
-      });
-    }
-
-    await promisePool.query('START TRANSACTION');
-
-    await promisePool.query(
-      `UPDATE asistencia 
-             SET HoraRegresoAlmuerzo = ?, MetodoValidacion = ? 
-             WHERE EmpId = ? AND Fecha = ?`,
-      [hora, req.ubicacionValida.metodo, empId, fecha]
-    );
-
-    await promisePool.query(
-      `INSERT INTO historial_marcaciones 
-             (EmpId, FechaHora, Tipo, IPAddress, Dispositivo, MetodoValidacion, DatosValidacion) 
-             VALUES (?, NOW(), 'RegresoAlmuerzo', ?, ?, ?, ?)`,
-      [
-        empId,
-        ipCliente,
-        dispositivo || 'web',
-        req.ubicacionValida.metodo,
-        JSON.stringify(req.ubicacionValida)
-      ]
-    );
-
-    await promisePool.query('COMMIT');
-
-    res.json({
-      success: true,
-      message: 'Regreso de almuerzo registrado',
-      hora,
-      metodo: req.ubicacionValida.metodo
-    });
-
-  } catch (error) {
-    await promisePool.query('ROLLBACK');
-    console.error(error);
-    res.status(500).json({ error: 'Error al registrar regreso de almuerzo' });
-  }
-});
-
-// Marcar salida
-app.post('/api/marcaciones/salida', validarUbicacionMarcacion, async (req, res) => {
-  try {
-    const { codigo_empleado, dispositivo } = req.body;
-    const fecha = new Date().toISOString().split('T')[0];
-    const hora = new Date().toTimeString().split(' ')[0];
-    const ipCliente = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
-
-    const [empleado] = await promisePool.query(
-      'SELECT EmpId, Nombres, Apellidos FROM empleado WHERE DocID = ?',
-      [codigo_empleado]
-    );
-
-    if (empleado.length === 0) {
-      return res.status(404).json({ error: 'Empleado no encontrado' });
-    }
-
-    const empId = empleado[0].EmpId;
-
-    // Obtener registro actual
-    const [asistencia] = await promisePool.query(
-      `SELECT * FROM asistencia 
-             WHERE EmpId = ? AND Fecha = ?`,
-      [empId, fecha]
-    );
-
-    if (asistencia.length === 0) {
-      return res.status(400).json({
-        error: 'Registro no encontrado',
-        message: 'No hay registro de entrada hoy'
-      });
-    }
-
-    const reg = asistencia[0];
-
-    // Calcular horas trabajadas
-    const entrada = new Date(`${fecha}T${reg.HoraEntrada}`);
-    const salidaAlmuerzo = reg.HoraSalidaAlmuerzo ? new Date(`${fecha}T${reg.HoraSalidaAlmuerzo}`) : null;
-    const regresoAlmuerzo = reg.HoraRegresoAlmuerzo ? new Date(`${fecha}T${reg.HoraRegresoAlmuerzo}`) : null;
-    const salida = new Date(`${fecha}T${hora}`);
-
-    let horasTrabajadas = 0;
-
-    if (entrada && salida) {
-      if (salidaAlmuerzo && regresoAlmuerzo) {
-        // Restar tiempo de almuerzo
-        const tiempoManana = (salidaAlmuerzo - entrada) / (1000 * 60 * 60);
-        const tiempoTarde = (salida - regresoAlmuerzo) / (1000 * 60 * 60);
-        horasTrabajadas = tiempoManana + tiempoTarde;
-      } else {
-        horasTrabajadas = (salida - entrada) / (1000 * 60 * 60);
-      }
-    }
-
-    await promisePool.query('START TRANSACTION');
-
-    // Actualizar registro
-    await promisePool.query(
-      `UPDATE asistencia 
-             SET HoraSalida = ?, HorasTrabajadas = ?, Estado = 'Completo', MetodoValidacion = ?
-             WHERE EmpId = ? AND Fecha = ?`,
-      [hora, horasTrabajadas.toFixed(2), req.ubicacionValida.metodo, empId, fecha]
-    );
-
-    // Registrar en historial
-    await promisePool.query(
-      `INSERT INTO historial_marcaciones 
-             (EmpId, FechaHora, Tipo, IPAddress, Dispositivo, MetodoValidacion, DatosValidacion) 
-             VALUES (?, NOW(), 'Salida', ?, ?, ?, ?)`,
-      [
-        empId,
-        ipCliente,
-        dispositivo || 'web',
-        req.ubicacionValida.metodo,
-        JSON.stringify(req.ubicacionValida)
-      ]
-    );
-
-    await promisePool.query('COMMIT');
-
-    res.json({
-      success: true,
-      message: 'Salida registrada correctamente',
-      empleado: `${empleado[0].Nombres} ${empleado[0].Apellidos}`,
-      horasTrabajadas: horasTrabajadas.toFixed(2),
-      hora,
-      metodo: req.ubicacionValida.metodo
-    });
-
-  } catch (error) {
-    await promisePool.query('ROLLBACK');
-    console.error(error);
-    res.status(500).json({ error: 'Error al registrar salida' });
-  }
-});
-
-// Obtener registro del día para un empleado
-app.get('/api/marcaciones/hoy/:codigo', async (req, res) => {
-  try {
-    const { codigo } = req.params;
-    const fecha = new Date().toISOString().split('T')[0];
-
-    const [resultados] = await promisePool.query(
-      `SELECT a.*, e.Nombres, e.Apellidos, e.DocID
-             FROM asistencia a
-             INNER JOIN empleado e ON a.EmpId = e.EmpId
-             WHERE e.DocID = ? AND a.Fecha = ?`,
-      [codigo, fecha]
-    );
-
-    res.json(resultados[0] || null);
-
-  } catch (error) {
-    console.error("❌ Error obteniendo registro:", error);
-    res.status(500).json({
-      error: 'Error al obtener registro',
-      message: error.message
-    });
-  }
-});
-
-// Obtener configuración de la empresa
-app.get('/api/empresa/configuracion', (req, res) => {
-  res.json({
-    nombre: EMPRESA_CONFIG.nombre,
-    direccion: EMPRESA_CONFIG.direccion,
-    coordenadas: EMPRESA_CONFIG.coordenadas,
-    radioPermitido: EMPRESA_CONFIG.radioPermitido,
-    wifiPermitidos: EMPRESA_CONFIG.wifiPermitidos,
-    requiereUbicacion: true
-  });
-});
-
-// Verificar ubicación
-app.post('/api/ubicacion/verificar', validarUbicacionMarcacion, (req, res) => {
-  res.json({
-    valida: true,
-    metodo: req.ubicacionValida.metodo,
-    datos: req.ubicacionValida
-  });
-});
-
-// Reporte de asistencia
-app.get('/api/reportes/asistencia', async (req, res) => {
-  try {
-    const { fecha_inicio, fecha_fin, empId } = req.query;
-
-    let query = `
-            SELECT 
-                e.EmpId,
-                e.DocID as Codigo,
-                e.Nombres,
-                e.Apellidos,
-                e.Cargo_EmpId,
-                a.Fecha,
-                a.HoraEntrada,
-                a.HoraSalidaAlmuerzo,
-                a.HoraRegresoAlmuerzo,
-                a.HoraSalida,
-                a.HorasTrabajadas,
-                a.Estado,
-                a.MetodoValidacion
-            FROM asistencia a
-            INNER JOIN empleado e ON a.EmpId = e.EmpId
-            WHERE a.Fecha BETWEEN ? AND ?
-        `;
-
-    const params = [fecha_inicio, fecha_fin];
-
-    if (empId) {
-      query += ' AND e.EmpId = ?';
-      params.push(empId);
-    }
-
-    query += ' ORDER BY a.Fecha DESC, e.Nombres';
-
-    const [resultados] = await promisePool.query(query, params);
-    res.json(resultados);
-
-  } catch (error) {
-    console.error("❌ Error generando reporte:", error);
-    res.status(500).json({
-      error: 'Error al generar reporte',
-      message: error.message
-    });
-  }
-});
 
 
 
@@ -4066,6 +3506,610 @@ app.get('/api/estadisticas/ventas', async (req, res) => {
   }
 });
 
+
+
+
+
+
+
+// ============================================
+// CONFIGURACIÓN DE UBICACIÓN DE LA EMPRESA
+// ============================================
+const EMPRESA_CONFIG = {
+  nombre: 'Golden Nails',
+  direccion: 'Avenida los Pajuiles, Trujillo 13009, Perú',
+  coordenadas: {
+    latitud: -8.128544932138585,  // Reemplaza con la latitud de tu local
+    longitud: -79.04263471792805   // Reemplaza con la longitud de tu local
+  },
+  radioPermitido: 30, // metros
+  wifiPermitidos: [
+    'GOLDEN NAILS 2.4G',
+    'GOLDEN NAILS 5G'
+  ],
+  ipRedLocal: ['192.168.', '10.0.', '172.16.']
+};
+
+// ============================================
+// FUNCIÓN PARA CALCULAR DISTANCIA
+// ============================================
+const calcularDistancia = (lat1, lon1, lat2, lon2) => {
+  const R = 6371e3;
+  const φ1 = lat1 * Math.PI / 180;
+  const φ2 = lat2 * Math.PI / 180;
+  const Δφ = (lat2 - lat1) * Math.PI / 180;
+  const Δλ = (lon2 - lon1) * Math.PI / 180;
+
+  const a = Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
+    Math.cos(φ1) * Math.cos(φ2) *
+    Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+
+  return R * c;
+};
+
+// Endpoint de prueba público
+app.get('/api/ping', (req, res) => {
+  res.json({
+    message: 'pong',
+    timestamp: new Date().toISOString(),
+    status: 'OK'
+  });
+});
+
+
+// ============================================
+// MIDDLEWARE DE VALIDACIÓN DE UBICACIÓN
+// ============================================
+const validarUbicacionMarcacion = async (req, res, next) => {
+  try {
+    const { latitud, longitud, wifiSSID } = req.body;
+    const ipCliente = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+
+    console.log("📍 Validando ubicación:", { ip: ipCliente, wifiSSID, latitud, longitud });
+
+    // Opción 1: Validar por WiFi
+    if (wifiSSID && EMPRESA_CONFIG.wifiPermitidos.includes(wifiSSID)) {
+      console.log("✅ WiFi válido:", wifiSSID);
+      req.ubicacionValida = {
+        valida: true,
+        metodo: 'wifi',
+        wifiSSID,
+        ip: ipCliente
+      };
+      return next();
+    }
+
+    // Opción 2: Validar por IP de red local
+    if (ipCliente && EMPRESA_CONFIG.ipRedLocal.some(red => ipCliente.includes(red))) {
+      console.log("✅ IP de red local válida:", ipCliente);
+      req.ubicacionValida = {
+        valida: true,
+        metodo: 'ip_local',
+        ip: ipCliente
+      };
+      return next();
+    }
+
+    // Opción 3: Validar por geolocalización
+    if (latitud && longitud) {
+      const distancia = calcularDistancia(
+        parseFloat(latitud),
+        parseFloat(longitud),
+        EMPRESA_CONFIG.coordenadas.latitud,
+        EMPRESA_CONFIG.coordenadas.longitud
+      );
+
+      console.log(`📍 Distancia al local: ${distancia.toFixed(2)} metros`);
+
+      if (distancia <= EMPRESA_CONFIG.radioPermitido) {
+        req.ubicacionValida = {
+          valida: true,
+          metodo: 'gps',
+          distancia: distancia.toFixed(2)
+        };
+        return next();
+      } else {
+        return res.status(403).json({
+          error: 'Ubicación no válida',
+          message: `Debes estar en el local para marcar. Distancia actual: ${distancia.toFixed(2)} metros`
+        });
+      }
+    }
+
+    return res.status(403).json({
+      error: 'Acceso denegado',
+      message: 'No estás en la ubicación autorizada. Conéctate al WiFi de la empresa o acércate al local.'
+    });
+
+  } catch (error) {
+    console.error("❌ Error validando ubicación:", error);
+    return res.status(500).json({
+      error: 'Error validando ubicación',
+      message: error.message
+    });
+  }
+};
+
+// ============================================
+// ENDPOINTS DE MARCADO
+// ============================================
+
+app.get('/api/empleados/documento/:codigo', async (req, res) => {
+  try {
+    const { codigo } = req.params;
+    
+    console.log(`🔍 Buscando empleado con documento: ${codigo}`);
+    
+    // Buscar empleado por DocID (cédula)
+    const [empleado] = await promisePool.query(
+      `SELECT EmpId, DocID, Nombres, Apellidos, Cargo_EmpId, Tipo_EmpId, telefono 
+       FROM empleado 
+       WHERE DocID = ? AND fecha_renuncia IS NULL`,
+      [codigo]
+    );
+    
+    if (empleado.length === 0) {
+      return res.status(404).json({
+        error: 'Empleado no encontrado',
+        message: 'No se encontró un empleado activo con ese documento'
+      });
+    }
+    
+    console.log(`✅ Empleado encontrado: ${empleado[0].Nombres} ${empleado[0].Apellidos}`);
+    
+    res.json(empleado[0]);
+    
+  } catch (error) {
+    console.error("❌ Error buscando empleado:", error);
+    res.status(500).json({
+      error: 'Error al buscar empleado',
+      message: error.message
+    });
+  }
+});
+
+
+
+// Marcar entrada
+app.post('/api/marcaciones/entrada', validarUbicacionMarcacion, async (req, res) => {
+  try {
+    const { codigo_empleado, dispositivo } = req.body;
+    const fecha = new Date().toISOString().split('T')[0];
+    const hora = new Date().toTimeString().split(' ')[0];
+    const ipCliente = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+
+    console.log("📝 Registrando entrada:", { codigo_empleado, fecha, hora });
+
+    // Buscar empleado por DocID (cédula) o podrías agregar un campo Codigo
+    const [empleado] = await promisePool.query(
+      `SELECT EmpId, Nombres, Apellidos, DocID 
+             FROM empleado 
+             WHERE DocID = ? AND fecha_renuncia IS NULL`,
+      [codigo_empleado]
+    );
+
+    if (empleado.length === 0) {
+      return res.status(404).json({
+        error: 'Empleado no encontrado',
+        message: 'Código de empleado inválido o empleado inactivo'
+      });
+    }
+
+    const empId = empleado[0].EmpId;
+
+    // Verificar si ya tiene registro hoy
+    const [asistencia] = await promisePool.query(
+      'SELECT AsistenciaID FROM asistencia WHERE EmpId = ? AND Fecha = ?',
+      [empId, fecha]
+    );
+
+    if (asistencia.length > 0) {
+      return res.status(400).json({
+        error: 'Registro duplicado',
+        message: 'Ya marcaste entrada hoy'
+      });
+    }
+
+    await promisePool.query('START TRANSACTION');
+
+    // Crear nuevo registro
+    await promisePool.query(
+      `INSERT INTO asistencia 
+             (EmpId, Fecha, HoraEntrada, Estado, MetodoValidacion, IPAddress) 
+             VALUES (?, ?, ?, 'Incompleto', ?, ?)`,
+      [empId, fecha, hora, req.ubicacionValida.metodo, ipCliente]
+    );
+
+    // Registrar en historial
+    await promisePool.query(
+      `INSERT INTO historial_marcaciones 
+             (EmpId, FechaHora, Tipo, IPAddress, Dispositivo, MetodoValidacion, DatosValidacion) 
+             VALUES (?, NOW(), 'Entrada', ?, ?, ?, ?)`,
+      [
+        empId,
+        ipCliente,
+        dispositivo || 'web',
+        req.ubicacionValida.metodo,
+        JSON.stringify(req.ubicacionValida)
+      ]
+    );
+
+    await promisePool.query('COMMIT');
+
+    console.log(`✅ Entrada registrada: ${empleado[0].Nombres} ${empleado[0].Apellidos} - ${hora}`);
+
+    res.json({
+      success: true,
+      message: 'Entrada registrada correctamente',
+      empleado: `${empleado[0].Nombres} ${empleado[0].Apellidos}`,
+      hora,
+      metodo: req.ubicacionValida.metodo
+    });
+
+  } catch (error) {
+    await promisePool.query('ROLLBACK');
+    console.error("❌ Error registrando entrada:", error);
+    res.status(500).json({
+      error: 'Error al registrar entrada',
+      message: error.message
+    });
+  }
+});
+
+// Marcar salida a almuerzo
+app.post('/api/marcaciones/salida-almuerzo', validarUbicacionMarcacion, async (req, res) => {
+  try {
+    const { codigo_empleado, dispositivo } = req.body;
+    const fecha = new Date().toISOString().split('T')[0];
+    const hora = new Date().toTimeString().split(' ')[0];
+    const ipCliente = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+
+    const [empleado] = await promisePool.query(
+      'SELECT EmpId, Nombres, Apellidos FROM empleado WHERE DocID = ?',
+      [codigo_empleado]
+    );
+
+    if (empleado.length === 0) {
+      return res.status(404).json({ error: 'Empleado no encontrado' });
+    }
+
+    const empId = empleado[0].EmpId;
+
+    // Verificar registro de hoy
+    const [asistencia] = await promisePool.query(
+      `SELECT * FROM asistencia 
+             WHERE EmpId = ? AND Fecha = ?`,
+      [empId, fecha]
+    );
+
+    if (asistencia.length === 0) {
+      return res.status(400).json({
+        error: 'Registro no encontrado',
+        message: 'Debes marcar entrada primero'
+      });
+    }
+
+    if (asistencia[0].HoraSalidaAlmuerzo) {
+      return res.status(400).json({
+        error: 'Registro duplicado',
+        message: 'Ya marcaste salida a almuerzo hoy'
+      });
+    }
+
+    await promisePool.query('START TRANSACTION');
+
+    // Actualizar registro
+    await promisePool.query(
+      `UPDATE asistencia 
+             SET HoraSalidaAlmuerzo = ?, MetodoValidacion = ? 
+             WHERE EmpId = ? AND Fecha = ?`,
+      [hora, req.ubicacionValida.metodo, empId, fecha]
+    );
+
+    // Registrar en historial
+    await promisePool.query(
+      `INSERT INTO historial_marcaciones 
+             (EmpId, FechaHora, Tipo, IPAddress, Dispositivo, MetodoValidacion, DatosValidacion) 
+             VALUES (?, NOW(), 'SalidaAlmuerzo', ?, ?, ?, ?)`,
+      [
+        empId,
+        ipCliente,
+        dispositivo || 'web',
+        req.ubicacionValida.metodo,
+        JSON.stringify(req.ubicacionValida)
+      ]
+    );
+
+    await promisePool.query('COMMIT');
+
+    res.json({
+      success: true,
+      message: 'Salida a almuerzo registrada',
+      hora,
+      metodo: req.ubicacionValida.metodo
+    });
+
+  } catch (error) {
+    await promisePool.query('ROLLBACK');
+    console.error(error);
+    res.status(500).json({ error: 'Error al registrar salida a almuerzo' });
+  }
+});
+
+// Marcar regreso de almuerzo
+app.post('/api/marcaciones/regreso-almuerzo', validarUbicacionMarcacion, async (req, res) => {
+  try {
+    const { codigo_empleado, dispositivo } = req.body;
+    const fecha = new Date().toISOString().split('T')[0];
+    const hora = new Date().toTimeString().split(' ')[0];
+    const ipCliente = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+
+    const [empleado] = await promisePool.query(
+      'SELECT EmpId FROM empleado WHERE DocID = ?',
+      [codigo_empleado]
+    );
+
+    if (empleado.length === 0) {
+      return res.status(404).json({ error: 'Empleado no encontrado' });
+    }
+
+    const empId = empleado[0].EmpId;
+
+    const [asistencia] = await promisePool.query(
+      `SELECT * FROM asistencia 
+             WHERE EmpId = ? AND Fecha = ?`,
+      [empId, fecha]
+    );
+
+    if (asistencia.length === 0) {
+      return res.status(400).json({
+        error: 'Registro no encontrado',
+        message: 'Debes marcar entrada primero'
+      });
+    }
+
+    if (!asistencia[0].HoraSalidaAlmuerzo) {
+      return res.status(400).json({
+        error: 'Secuencia incorrecta',
+        message: 'Debes marcar salida a almuerzo primero'
+      });
+    }
+
+    if (asistencia[0].HoraRegresoAlmuerzo) {
+      return res.status(400).json({
+        error: 'Registro duplicado',
+        message: 'Ya marcaste regreso de almuerzo hoy'
+      });
+    }
+
+    await promisePool.query('START TRANSACTION');
+
+    await promisePool.query(
+      `UPDATE asistencia 
+             SET HoraRegresoAlmuerzo = ?, MetodoValidacion = ? 
+             WHERE EmpId = ? AND Fecha = ?`,
+      [hora, req.ubicacionValida.metodo, empId, fecha]
+    );
+
+    await promisePool.query(
+      `INSERT INTO historial_marcaciones 
+             (EmpId, FechaHora, Tipo, IPAddress, Dispositivo, MetodoValidacion, DatosValidacion) 
+             VALUES (?, NOW(), 'RegresoAlmuerzo', ?, ?, ?, ?)`,
+      [
+        empId,
+        ipCliente,
+        dispositivo || 'web',
+        req.ubicacionValida.metodo,
+        JSON.stringify(req.ubicacionValida)
+      ]
+    );
+
+    await promisePool.query('COMMIT');
+
+    res.json({
+      success: true,
+      message: 'Regreso de almuerzo registrado',
+      hora,
+      metodo: req.ubicacionValida.metodo
+    });
+
+  } catch (error) {
+    await promisePool.query('ROLLBACK');
+    console.error(error);
+    res.status(500).json({ error: 'Error al registrar regreso de almuerzo' });
+  }
+});
+
+// Marcar salida
+app.post('/api/marcaciones/salida', validarUbicacionMarcacion, async (req, res) => {
+  try {
+    const { codigo_empleado, dispositivo } = req.body;
+    const fecha = new Date().toISOString().split('T')[0];
+    const hora = new Date().toTimeString().split(' ')[0];
+    const ipCliente = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+
+    const [empleado] = await promisePool.query(
+      'SELECT EmpId, Nombres, Apellidos FROM empleado WHERE DocID = ?',
+      [codigo_empleado]
+    );
+
+    if (empleado.length === 0) {
+      return res.status(404).json({ error: 'Empleado no encontrado' });
+    }
+
+    const empId = empleado[0].EmpId;
+
+    // Obtener registro actual
+    const [asistencia] = await promisePool.query(
+      `SELECT * FROM asistencia 
+             WHERE EmpId = ? AND Fecha = ?`,
+      [empId, fecha]
+    );
+
+    if (asistencia.length === 0) {
+      return res.status(400).json({
+        error: 'Registro no encontrado',
+        message: 'No hay registro de entrada hoy'
+      });
+    }
+
+    const reg = asistencia[0];
+
+    // Calcular horas trabajadas
+    const entrada = new Date(`${fecha}T${reg.HoraEntrada}`);
+    const salidaAlmuerzo = reg.HoraSalidaAlmuerzo ? new Date(`${fecha}T${reg.HoraSalidaAlmuerzo}`) : null;
+    const regresoAlmuerzo = reg.HoraRegresoAlmuerzo ? new Date(`${fecha}T${reg.HoraRegresoAlmuerzo}`) : null;
+    const salida = new Date(`${fecha}T${hora}`);
+
+    let horasTrabajadas = 0;
+
+    if (entrada && salida) {
+      if (salidaAlmuerzo && regresoAlmuerzo) {
+        // Restar tiempo de almuerzo
+        const tiempoManana = (salidaAlmuerzo - entrada) / (1000 * 60 * 60);
+        const tiempoTarde = (salida - regresoAlmuerzo) / (1000 * 60 * 60);
+        horasTrabajadas = tiempoManana + tiempoTarde;
+      } else {
+        horasTrabajadas = (salida - entrada) / (1000 * 60 * 60);
+      }
+    }
+
+    await promisePool.query('START TRANSACTION');
+
+    // Actualizar registro
+    await promisePool.query(
+      `UPDATE asistencia 
+             SET HoraSalida = ?, HorasTrabajadas = ?, Estado = 'Completo', MetodoValidacion = ?
+             WHERE EmpId = ? AND Fecha = ?`,
+      [hora, horasTrabajadas.toFixed(2), req.ubicacionValida.metodo, empId, fecha]
+    );
+
+    // Registrar en historial
+    await promisePool.query(
+      `INSERT INTO historial_marcaciones 
+             (EmpId, FechaHora, Tipo, IPAddress, Dispositivo, MetodoValidacion, DatosValidacion) 
+             VALUES (?, NOW(), 'Salida', ?, ?, ?, ?)`,
+      [
+        empId,
+        ipCliente,
+        dispositivo || 'web',
+        req.ubicacionValida.metodo,
+        JSON.stringify(req.ubicacionValida)
+      ]
+    );
+
+    await promisePool.query('COMMIT');
+
+    res.json({
+      success: true,
+      message: 'Salida registrada correctamente',
+      empleado: `${empleado[0].Nombres} ${empleado[0].Apellidos}`,
+      horasTrabajadas: horasTrabajadas.toFixed(2),
+      hora,
+      metodo: req.ubicacionValida.metodo
+    });
+
+  } catch (error) {
+    await promisePool.query('ROLLBACK');
+    console.error(error);
+    res.status(500).json({ error: 'Error al registrar salida' });
+  }
+});
+
+// Obtener registro del día para un empleado
+app.get('/api/marcaciones/hoy/:codigo', async (req, res) => {
+  try {
+    const { codigo } = req.params;
+    const fecha = new Date().toISOString().split('T')[0];
+
+    const [resultados] = await promisePool.query(
+      `SELECT a.*, e.Nombres, e.Apellidos, e.DocID
+             FROM asistencia a
+             INNER JOIN empleado e ON a.EmpId = e.EmpId
+             WHERE e.DocID = ? AND a.Fecha = ?`,
+      [codigo, fecha]
+    );
+
+    res.json(resultados[0] || null);
+
+  } catch (error) {
+    console.error("❌ Error obteniendo registro:", error);
+    res.status(500).json({
+      error: 'Error al obtener registro',
+      message: error.message
+    });
+  }
+});
+
+// Obtener configuración de la empresa
+app.get('/api/empresa/configuracion', (req, res) => {
+  res.json({
+    nombre: EMPRESA_CONFIG.nombre,
+    direccion: EMPRESA_CONFIG.direccion,
+    coordenadas: EMPRESA_CONFIG.coordenadas,
+    radioPermitido: EMPRESA_CONFIG.radioPermitido,
+    wifiPermitidos: EMPRESA_CONFIG.wifiPermitidos,
+    requiereUbicacion: true
+  });
+});
+
+// Verificar ubicación
+app.post('/api/ubicacion/verificar', validarUbicacionMarcacion, (req, res) => {
+  res.json({
+    valida: true,
+    metodo: req.ubicacionValida.metodo,
+    datos: req.ubicacionValida
+  });
+});
+
+// Reporte de asistencia
+app.get('/api/reportes/asistencia', async (req, res) => {
+  try {
+    const { fecha_inicio, fecha_fin, empId } = req.query;
+
+    let query = `
+            SELECT 
+                e.EmpId,
+                e.DocID as Codigo,
+                e.Nombres,
+                e.Apellidos,
+                e.Cargo_EmpId,
+                a.Fecha,
+                a.HoraEntrada,
+                a.HoraSalidaAlmuerzo,
+                a.HoraRegresoAlmuerzo,
+                a.HoraSalida,
+                a.HorasTrabajadas,
+                a.Estado,
+                a.MetodoValidacion
+            FROM asistencia a
+            INNER JOIN empleado e ON a.EmpId = e.EmpId
+            WHERE a.Fecha BETWEEN ? AND ?
+        `;
+
+    const params = [fecha_inicio, fecha_fin];
+
+    if (empId) {
+      query += ' AND e.EmpId = ?';
+      params.push(empId);
+    }
+
+    query += ' ORDER BY a.Fecha DESC, e.Nombres';
+
+    const [resultados] = await promisePool.query(query, params);
+    res.json(resultados);
+
+  } catch (error) {
+    console.error("❌ Error generando reporte:", error);
+    res.status(500).json({
+      error: 'Error al generar reporte',
+      message: error.message
+    });
+  }
+});
+
+
 /* app.get('/api/venta/estadisticas', async (req, res) => {
   try {
     console.log('🔍 Headers recibidos:', req.headers);
@@ -4128,8 +4172,14 @@ const authenticateToken = (req, res, next) => {
   });
 };
 
+
+
 // 🔐 APLICAR MIDDLEWARE A TODAS LAS RUTAS DEL API
 app.use('/api', authenticateToken);
+
+
+
+
 
 // 🔄 RUTA PARA CAMBIAR CONTRASEÑA DESDE EL PERFIL
 app.post('/api/auth/cambiar-password', authenticateToken, async (req, res) => {
