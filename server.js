@@ -3522,7 +3522,7 @@ const EMPRESA_CONFIG = {
     latitud: -8.128544932138585,  // Reemplaza con la latitud de tu local
     longitud: -79.04263471792805   // Reemplaza con la longitud de tu local
   },
-  radioPermitido: 5, // metros
+  radioPermitido: 15, // metros
   wifiPermitidos: [
     'GOLDEN NAILS 2.4G',
     'GOLDEN NAILS 5G'
