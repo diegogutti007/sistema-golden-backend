@@ -332,6 +332,889 @@ const generarSiguienteCodigoServicio = async () => {
   }
 };
 
+
+//////////////////////////////////////////////////////
+// ============================================
+// ENDPOINTS DE GESTIÓN DE HORARIOS
+// ============================================
+
+// ============================================
+// 1. OBTENER TODOS LOS HORARIOS
+// ============================================
+app.get('/api/horarios', async (req, res) => {
+    try {
+        const { activo, search, tipo_empleado } = req.query;
+        
+        let query = `
+            SELECT h.*, 
+                   COUNT(DISTINCT e.EmpId) as totalEmpleados,
+                   COUNT(DISTINCT te.Tipo_EmpId) as totalTipos
+            FROM horarios h
+            LEFT JOIN empleado e ON h.HorarioId = e.HorarioId AND e.fecha_renuncia IS NULL
+            LEFT JOIN tipo_empleado te ON h.HorarioId = te.HorarioId AND te.Activo = TRUE
+            WHERE 1=1
+        `;
+        const params = [];
+        
+        // Filtro por estado
+        if (activo !== undefined && activo !== '') {
+            query += ' AND h.Activo = ?';
+            params.push(activo === 'true' || activo === '1');
+        }
+        
+        // Filtro por búsqueda
+        if (search) {
+            query += ' AND (h.Nombre LIKE ? OR h.Codigo LIKE ? OR h.Descripcion LIKE ?)';
+            params.push(`%${search}%`, `%${search}%`, `%${search}%`);
+        }
+        
+        // Filtro por tipo de empleado
+        if (tipo_empleado) {
+            query += ' AND EXISTS (SELECT 1 FROM tipo_empleado te2 WHERE te2.HorarioId = h.HorarioId AND te2.Tipo_EmpId = ?)';
+            params.push(tipo_empleado);
+        }
+        
+        query += ' GROUP BY h.HorarioId ORDER BY h.HoraEntrada ASC, h.Nombre ASC';
+        
+        const [horarios] = await promisePool.query(query, params);
+        
+        // Formatear horas
+        const horariosFormateados = horarios.map(h => ({
+            ...h,
+            HoraEntrada: h.HoraEntrada ? h.HoraEntrada.substring(0, 5) : null,
+            HoraSalida: h.HoraSalida ? h.HoraSalida.substring(0, 5) : null,
+            HoraAlmuerzoInicio: h.HoraAlmuerzoInicio ? h.HoraAlmuerzoInicio.substring(0, 5) : null,
+            HoraAlmuerzoFin: h.HoraAlmuerzoFin ? h.HoraAlmuerzoFin.substring(0, 5) : null
+        }));
+        
+        res.json(horariosFormateados);
+        
+    } catch (error) {
+        console.error('❌ Error obteniendo horarios:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// ============================================
+// 2. OBTENER UN HORARIO POR ID
+// ============================================
+app.get('/api/horarios/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        
+        const [horario] = await promisePool.query(
+            `SELECT h.*, 
+                    COUNT(DISTINCT e.EmpId) as totalEmpleados,
+                    COUNT(DISTINCT te.Tipo_EmpId) as totalTipos
+             FROM horarios h
+             LEFT JOIN empleado e ON h.HorarioId = e.HorarioId AND e.fecha_renuncia IS NULL
+             LEFT JOIN tipo_empleado te ON h.HorarioId = te.HorarioId AND te.Activo = TRUE
+             WHERE h.HorarioId = ?
+             GROUP BY h.HorarioId`,
+            [id]
+        );
+        
+        if (horario.length === 0) {
+            return res.status(404).json({ error: 'Horario no encontrado' });
+        }
+        
+        // Formatear horas
+        const horarioFormateado = {
+            ...horario[0],
+            HoraEntrada: horario[0].HoraEntrada ? horario[0].HoraEntrada.substring(0, 5) : null,
+            HoraSalida: horario[0].HoraSalida ? horario[0].HoraSalida.substring(0, 5) : null,
+            HoraAlmuerzoInicio: horario[0].HoraAlmuerzoInicio ? horario[0].HoraAlmuerzoInicio.substring(0, 5) : null,
+            HoraAlmuerzoFin: horario[0].HoraAlmuerzoFin ? horario[0].HoraAlmuerzoFin.substring(0, 5) : null
+        };
+        
+        res.json(horarioFormateado);
+        
+    } catch (error) {
+        console.error('❌ Error obteniendo horario:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// ============================================
+// 3. CREAR NUEVO HORARIO
+// ============================================
+app.post('/api/horarios', async (req, res) => {
+    try {
+        const {
+            Codigo,
+            Nombre,
+            Descripcion,
+            HoraEntrada,
+            HoraSalida,
+            HoraAlmuerzoInicio,
+            HoraAlmuerzoFin,
+            ToleranciaEntrada,
+            ToleranciaSalida,
+            HorasLaborales,
+            DiasLaborales,
+            Activo,
+            EsTurnoNoche,
+            TieneAlmuerzo
+        } = req.body;
+        
+        // Validaciones
+        if (!Codigo || !Nombre || !HoraEntrada || !HoraSalida) {
+            return res.status(400).json({ 
+                error: 'Faltan campos requeridos',
+                required: ['Codigo', 'Nombre', 'HoraEntrada', 'HoraSalida']
+            });
+        }
+        
+        // Validar código único
+        const [existente] = await promisePool.query(
+            'SELECT HorarioId FROM horarios WHERE Codigo = ?',
+            [Codigo]
+        );
+        
+        if (existente.length > 0) {
+            return res.status(400).json({ error: 'El código de horario ya existe' });
+        }
+        
+        // Validar que hora entrada sea menor a hora salida
+        if (HoraEntrada >= HoraSalida && !EsTurnoNoche) {
+            return res.status(400).json({ 
+                error: 'La hora de entrada debe ser menor que la hora de salida' 
+            });
+        }
+        
+        // Validar almuerzo
+        if (TieneAlmuerzo && (!HoraAlmuerzoInicio || !HoraAlmuerzoFin)) {
+            return res.status(400).json({ 
+                error: 'Debe especificar inicio y fin de almuerzo' 
+            });
+        }
+        
+        if (TieneAlmuerzo && HoraAlmuerzoInicio >= HoraAlmuerzoFin) {
+            return res.status(400).json({ 
+                error: 'La hora de inicio de almuerzo debe ser menor que la hora de fin' 
+            });
+        }
+        
+        // Insertar horario
+        const [result] = await promisePool.query(
+            `INSERT INTO horarios 
+             (Codigo, Nombre, Descripcion, HoraEntrada, HoraSalida, 
+              HoraAlmuerzoInicio, HoraAlmuerzoFin, ToleranciaEntrada, 
+              ToleranciaSalida, HorasLaborales, DiasLaborales, Activo, 
+              EsTurnoNoche, TieneAlmuerzo, UsuarioCreacion) 
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+                Codigo.toUpperCase(), 
+                Nombre, 
+                Descripcion || null, 
+                HoraEntrada, 
+                HoraSalida,
+                TieneAlmuerzo ? HoraAlmuerzoInicio : null,
+                TieneAlmuerzo ? HoraAlmuerzoFin : null,
+                ToleranciaEntrada || 15,
+                ToleranciaSalida || 15,
+                HorasLaborales || 8,
+                DiasLaborales || '1,2,3,4,5',
+                Activo !== false,
+                EsTurnoNoche || false,
+                TieneAlmuerzo !== false,
+                req.usuario?.nombre || 'Sistema'
+            ]
+        );
+        
+        // Registrar en bitácora
+        console.log(`✅ Horario creado: ${Codigo} - ${Nombre}`);
+        
+        res.json({
+            success: true,
+            message: 'Horario creado exitosamente',
+            horarioId: result.insertId
+        });
+        
+    } catch (error) {
+        console.error('❌ Error creando horario:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// ============================================
+// 4. ACTUALIZAR HORARIO
+// ============================================
+app.put('/api/horarios/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const updates = req.body;
+        
+        // Verificar que el horario existe
+        const [horario] = await promisePool.query(
+            'SELECT * FROM horarios WHERE HorarioId = ?',
+            [id]
+        );
+        
+        if (horario.length === 0) {
+            return res.status(404).json({ error: 'Horario no encontrado' });
+        }
+        
+        // Validar código único (si se está cambiando)
+        if (updates.Codigo && updates.Codigo !== horario[0].Codigo) {
+            const [existente] = await promisePool.query(
+                'SELECT HorarioId FROM horarios WHERE Codigo = ? AND HorarioId != ?',
+                [updates.Codigo, id]
+            );
+            if (existente.length > 0) {
+                return res.status(400).json({ error: 'El código de horario ya existe' });
+            }
+        }
+        
+        // Construir query dinámica
+        const camposPermitidos = [
+            'Codigo', 'Nombre', 'Descripcion', 'HoraEntrada', 'HoraSalida',
+            'HoraAlmuerzoInicio', 'HoraAlmuerzoFin', 'ToleranciaEntrada',
+            'ToleranciaSalida', 'HorasLaborales', 'DiasLaborales',
+            'Activo', 'EsTurnoNoche', 'TieneAlmuerzo'
+        ];
+        
+        const campos = [];
+        const valores = [];
+        
+        for (const campo of camposPermitidos) {
+            if (updates[campo] !== undefined) {
+                // Manejar campos especiales
+                if (campo === 'HoraAlmuerzoInicio' || campo === 'HoraAlmuerzoFin') {
+                    if (updates.TieneAlmuerzo !== false && updates[campo]) {
+                        campos.push(`${campo} = ?`);
+                        valores.push(updates[campo]);
+                    } else if (campo === 'HoraAlmuerzoInicio' && updates.TieneAlmuerzo === false) {
+                        campos.push(`${campo} = NULL`);
+                    } else {
+                        campos.push(`${campo} = ?`);
+                        valores.push(updates[campo] || null);
+                    }
+                } else if (campo === 'TieneAlmuerzo') {
+                    campos.push(`${campo} = ?`);
+                    valores.push(updates[campo] ? 1 : 0);
+                } else {
+                    campos.push(`${campo} = ?`);
+                    valores.push(updates[campo]);
+                }
+            }
+        }
+        
+        if (campos.length === 0) {
+            return res.status(400).json({ error: 'No hay campos para actualizar' });
+        }
+        
+        valores.push(id);
+        
+        await promisePool.query(
+            `UPDATE horarios SET ${campos.join(', ')} WHERE HorarioId = ?`,
+            valores
+        );
+        
+        console.log(`✅ Horario actualizado: ID ${id}`);
+        
+        res.json({
+            success: true,
+            message: 'Horario actualizado exitosamente'
+        });
+        
+    } catch (error) {
+        console.error('❌ Error actualizando horario:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// ============================================
+// 5. ELIMINAR HORARIO (Soft delete)
+// ============================================
+app.delete('/api/horarios/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        
+        // Verificar que el horario existe
+        const [horario] = await promisePool.query(
+            'SELECT * FROM horarios WHERE HorarioId = ?',
+            [id]
+        );
+        
+        if (horario.length === 0) {
+            return res.status(404).json({ error: 'Horario no encontrado' });
+        }
+        
+        // Verificar si hay empleados usando este horario
+        const [empleados] = await promisePool.query(
+            'SELECT COUNT(*) as total FROM empleado WHERE HorarioId = ? AND fecha_renuncia IS NULL',
+            [id]
+        );
+        
+        if (empleados[0].total > 0) {
+            return res.status(400).json({ 
+                error: 'No se puede eliminar el horario',
+                message: `Hay ${empleados[0].total} empleados activos con este horario. Desactívalo primero.`
+            });
+        }
+        
+        // Verificar si hay tipos de empleado usando este horario
+        const [tipos] = await promisePool.query(
+            'SELECT COUNT(*) as total FROM tipo_empleado WHERE HorarioId = ? AND Activo = TRUE',
+            [id]
+        );
+        
+        if (tipos[0].total > 0) {
+            return res.status(400).json({ 
+                error: 'No se puede eliminar el horario',
+                message: `Hay ${tipos[0].total} tipos de empleado que usan este horario.`
+            });
+        }
+        
+        // Soft delete: desactivar en lugar de eliminar
+        await promisePool.query(
+            'UPDATE horarios SET Activo = FALSE WHERE HorarioId = ?',
+            [id]
+        );
+        
+        console.log(`✅ Horario desactivado: ID ${id}`);
+        
+        res.json({
+            success: true,
+            message: 'Horario desactivado exitosamente'
+        });
+        
+    } catch (error) {
+        console.error('❌ Error eliminando horario:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// ============================================
+// 6. ASIGNAR HORARIO A EMPLEADO
+// ============================================
+app.post('/api/empleados/:id/asignar-horario', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { horarioId, fechaInicio, motivo } = req.body;
+        
+        if (!horarioId) {
+            return res.status(400).json({ error: 'Debe especificar un horario' });
+        }
+        
+        // Verificar empleado
+        const [empleado] = await promisePool.query(
+            'SELECT EmpId, Nombres, Apellidos, HorarioId as HorarioActual FROM empleado WHERE EmpId = ?',
+            [id]
+        );
+        
+        if (empleado.length === 0) {
+            return res.status(404).json({ error: 'Empleado no encontrado' });
+        }
+        
+        // Verificar horario
+        const [horario] = await promisePool.query(
+            'SELECT * FROM horarios WHERE HorarioId = ? AND Activo = TRUE',
+            [horarioId]
+        );
+        
+        if (horario.length === 0) {
+            return res.status(404).json({ error: 'Horario no encontrado o inactivo' });
+        }
+        
+        // Guardar horario anterior
+        const horarioAnteriorId = empleado[0].HorarioActual;
+        
+        // Actualizar empleado
+        await promisePool.query(
+            `UPDATE empleado 
+             SET HorarioId = ?, HorarioPersonalizado = TRUE, FechaModificacion = NOW()
+             WHERE EmpId = ?`,
+            [horarioId, id]
+        );
+        
+        // Registrar en historial de cambios
+        await promisePool.query(
+            `INSERT INTO historial_cambio_horario 
+             (EmpleadoId, HorarioAnteriorId, HorarioNuevoId, Motivo, Usuario) 
+             VALUES (?, ?, ?, ?, ?)`,
+            [id, horarioAnteriorId, horarioId, motivo || 'Asignación manual', req.usuario?.nombre || 'Sistema']
+        );
+        
+        console.log(`✅ Horario asignado: ${empleado[0].Nombres} - ${horario[0].Nombre}`);
+        
+        res.json({
+            success: true,
+            message: `Horario "${horario[0].Nombre}" asignado a ${empleado[0].Nombres} ${empleado[0].Apellidos}`,
+            empleado: empleado[0],
+            horario: horario[0]
+        });
+        
+    } catch (error) {
+        console.error('❌ Error asignando horario:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// ============================================
+// 7. OBTENER HORARIO DE EMPLEADO
+// ============================================
+app.get('/api/empleados/:id/horario', async (req, res) => {
+    try {
+        const { id } = req.params;
+        
+        const [empleado] = await promisePool.query(
+            `SELECT e.*, h.*, t.Nombre as TipoEmpleado
+             FROM empleado e
+             LEFT JOIN horarios h ON e.HorarioId = h.HorarioId
+             LEFT JOIN tipo_empleado t ON e.Tipo_EmpId = t.Tipo_EmpId
+             WHERE e.EmpId = ?`,
+            [id]
+        );
+        
+        if (empleado.length === 0) {
+            return res.status(404).json({ error: 'Empleado no encontrado' });
+        }
+        
+        res.json({
+            empleado: {
+                EmpId: empleado[0].EmpId,
+                Nombres: empleado[0].Nombres,
+                Apellidos: empleado[0].Apellidos,
+                TipoEmpleado: empleado[0].TipoEmpleado
+            },
+            horario: empleado[0].HorarioId ? {
+                HorarioId: empleado[0].HorarioId,
+                Codigo: empleado[0].Codigo,
+                Nombre: empleado[0].Nombre,
+                HoraEntrada: empleado[0].HoraEntrada,
+                HoraSalida: empleado[0].HoraSalida,
+                HoraAlmuerzoInicio: empleado[0].HoraAlmuerzoInicio,
+                HoraAlmuerzoFin: empleado[0].HoraAlmuerzoFin,
+                ToleranciaEntrada: empleado[0].ToleranciaEntrada,
+                DiasLaborales: empleado[0].DiasLaborales
+            } : null,
+            horarioPersonalizado: empleado[0].HorarioPersonalizado === 1
+        });
+        
+    } catch (error) {
+        console.error('❌ Error obteniendo horario de empleado:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// ============================================
+// 8. CREAR EXCEPCIÓN DE HORARIO
+// ============================================
+app.post('/api/horarios/excepciones', async (req, res) => {
+    try {
+        const { empleadoId, horarioId, fechaInicio, fechaFin, motivo } = req.body;
+        
+        if (!empleadoId || !fechaInicio || !fechaFin) {
+            return res.status(400).json({ error: 'Faltan campos requeridos' });
+        }
+        
+        // Verificar empleado
+        const [empleado] = await promisePool.query(
+            'SELECT EmpId, Nombres FROM empleado WHERE EmpId = ?',
+            [empleadoId]
+        );
+        
+        if (empleado.length === 0) {
+            return res.status(404).json({ error: 'Empleado no encontrado' });
+        }
+        
+        // Verificar horario si se especificó
+        if (horarioId) {
+            const [horario] = await promisePool.query(
+                'SELECT HorarioId FROM horarios WHERE HorarioId = ?',
+                [horarioId]
+            );
+            if (horario.length === 0) {
+                return res.status(404).json({ error: 'Horario no encontrado' });
+            }
+        }
+        
+        // Validar fechas
+        if (new Date(fechaInicio) > new Date(fechaFin)) {
+            return res.status(400).json({ error: 'La fecha de inicio debe ser menor que la fecha de fin' });
+        }
+        
+        // Insertar excepción
+        const [result] = await promisePool.query(
+            `INSERT INTO horario_excepcion 
+             (EmpleadoId, HorarioId, FechaInicio, FechaFin, Motivo) 
+             VALUES (?, ?, ?, ?, ?)`,
+            [empleadoId, horarioId || null, fechaInicio, fechaFin, motivo || null]
+        );
+        
+        console.log(`✅ Excepción creada para empleado ${empleado[0].Nombres}`);
+        
+        res.json({
+            success: true,
+            message: 'Excepción de horario creada exitosamente',
+            excepcionId: result.insertId
+        });
+        
+    } catch (error) {
+        console.error('❌ Error creando excepción:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// ============================================
+// 9. OBTENER EXCEPCIONES DE HORARIO
+// ============================================
+app.get('/api/horarios/excepciones', async (req, res) => {
+    try {
+        const { empleadoId, estado, fecha } = req.query;
+        
+        let query = `
+            SELECT he.*, e.Nombres, e.Apellidos, e.DocID,
+                   h.Nombre as HorarioNombre, h.Codigo as HorarioCodigo
+            FROM horario_excepcion he
+            INNER JOIN empleado e ON he.EmpleadoId = e.EmpId
+            LEFT JOIN horarios h ON he.HorarioId = h.HorarioId
+            WHERE 1=1
+        `;
+        const params = [];
+        
+        if (empleadoId) {
+            query += ' AND he.EmpleadoId = ?';
+            params.push(empleadoId);
+        }
+        
+        if (estado) {
+            query += ' AND he.Estado = ?';
+            params.push(estado);
+        }
+        
+        if (fecha) {
+            query += ' AND ? BETWEEN he.FechaInicio AND he.FechaFin';
+            params.push(fecha);
+        }
+        
+        query += ' ORDER BY he.FechaInicio DESC, he.FechaSolicitud DESC';
+        
+        const [excepciones] = await promisePool.query(query, params);
+        
+        res.json(excepciones);
+        
+    } catch (error) {
+        console.error('❌ Error obteniendo excepciones:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// ============================================
+// 10. APROBAR/RECHAZAR EXCEPCIÓN DE HORARIO
+// ============================================
+app.put('/api/horarios/excepciones/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { estado, comentario } = req.body;
+        
+        if (!estado || !['Aprobado', 'Rechazado'].includes(estado)) {
+            return res.status(400).json({ error: 'Estado inválido' });
+        }
+        
+        const [excepcion] = await promisePool.query(
+            'SELECT * FROM horario_excepcion WHERE ExcepcionId = ?',
+            [id]
+        );
+        
+        if (excepcion.length === 0) {
+            return res.status(404).json({ error: 'Excepción no encontrada' });
+        }
+        
+        await promisePool.query(
+            `UPDATE horario_excepcion 
+             SET Estado = ?, FechaAprobacion = NOW(), UsuarioAprobacion = ?
+             WHERE ExcepcionId = ?`,
+            [estado, req.usuario?.nombre || 'Sistema', id]
+        );
+        
+        console.log(`✅ Excepción ${estado}: ID ${id}`);
+        
+        res.json({
+            success: true,
+            message: `Excepción ${estado.toLowerCase()} exitosamente`
+        });
+        
+    } catch (error) {
+        console.error('❌ Error aprobando excepción:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// ============================================
+// 11. OBTENER TIPOS DE EMPLEADO (para asignar horarios)
+// ============================================
+app.get('/api/tipos-empleado', async (req, res) => {
+    try {
+        const [tipos] = await promisePool.query(
+            `SELECT t.*, h.Nombre as HorarioNombre, h.Codigo as HorarioCodigo,
+                    h.HoraEntrada, h.HoraSalida
+             FROM tipo_empleado t
+             LEFT JOIN horarios h ON t.HorarioId = h.HorarioId
+             WHERE t.Activo = TRUE
+             ORDER BY t.Tipo_EmpId`
+        );
+        
+        res.json(tipos);
+        
+    } catch (error) {
+        console.error('❌ Error obteniendo tipos de empleado:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// ============================================
+// 12. ASIGNAR HORARIO A TIPO DE EMPLEADO
+// ============================================
+app.put('/api/tipos-empleado/:id/horario', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { horarioId } = req.body;
+        
+        const [tipo] = await promisePool.query(
+            'SELECT * FROM tipo_empleado WHERE Tipo_EmpId = ?',
+            [id]
+        );
+        
+        if (tipo.length === 0) {
+            return res.status(404).json({ error: 'Tipo de empleado no encontrado' });
+        }
+        
+        if (horarioId) {
+            const [horario] = await promisePool.query(
+                'SELECT HorarioId FROM horarios WHERE HorarioId = ?',
+                [horarioId]
+            );
+            if (horario.length === 0) {
+                return res.status(404).json({ error: 'Horario no encontrado' });
+            }
+        }
+        
+        await promisePool.query(
+            'UPDATE tipo_empleado SET HorarioId = ? WHERE Tipo_EmpId = ?',
+            [horarioId || null, id]
+        );
+        
+        console.log(`✅ Horario asignado a tipo de empleado ${id}`);
+        
+        res.json({
+            success: true,
+            message: 'Horario asignado correctamente'
+        });
+        
+    } catch (error) {
+        console.error('❌ Error asignando horario a tipo:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// ============================================
+// 13. OBTENER HORARIO DEL DÍA PARA EMPLEADO
+// ============================================
+app.get('/api/empleados/:id/horario-hoy', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const hoy = new Date().toISOString().split('T')[0];
+        const diaSemana = new Date().getDay();
+        const diaNumero = diaSemana === 0 ? 7 : diaSemana;
+        
+        // Verificar excepción
+        const [excepcion] = await promisePool.query(
+            `SELECT h.* 
+             FROM horario_excepcion he
+             INNER JOIN horarios h ON he.HorarioId = h.HorarioId
+             WHERE he.EmpleadoId = ? 
+               AND he.Estado = 'Aprobado'
+               AND ? BETWEEN he.FechaInicio AND he.FechaFin`,
+            [id, hoy]
+        );
+        
+        if (excepcion.length > 0) {
+            return res.json({
+                tipo: 'excepcion',
+                horario: excepcion[0],
+                mensaje: 'Horario especial por excepción'
+            });
+        }
+        
+        // Obtener horario del empleado
+        const [empleado] = await promisePool.query(
+            `SELECT e.HorarioId, e.HorarioPersonalizado, h.*
+             FROM empleado e
+             LEFT JOIN horarios h ON e.HorarioId = h.HorarioId
+             WHERE e.EmpId = ?`,
+            [id]
+        );
+        
+        if (empleado.length > 0 && empleado[0].HorarioId) {
+            // Verificar si es día laborable
+            const diasLaborales = empleado[0].DiasLaborales || '1,2,3,4,5';
+            const esLaborable = diasLaborales.split(',').includes(diaNumero.toString());
+            
+            return res.json({
+                tipo: empleado[0].HorarioPersonalizado ? 'personalizado' : 'asignado',
+                horario: empleado[0],
+                esLaborable,
+                mensaje: esLaborable ? 'Día laborable' : 'Día no laborable'
+            });
+        }
+        
+        // Obtener horario por tipo de empleado
+        const [porTipo] = await promisePool.query(
+            `SELECT t.HorarioId, h.*
+             FROM empleado e
+             INNER JOIN tipo_empleado t ON e.Tipo_EmpId = t.Tipo_EmpId
+             INNER JOIN horarios h ON t.HorarioId = h.HorarioId
+             WHERE e.EmpId = ?`,
+            [id]
+        );
+        
+        if (porTipo.length > 0) {
+            const diasLaborales = porTipo[0].DiasLaborales || '1,2,3,4,5';
+            const esLaborable = diasLaborales.split(',').includes(diaNumero.toString());
+            
+            return res.json({
+                tipo: 'tipo_empleado',
+                horario: porTipo[0],
+                esLaborable,
+                mensaje: esLaborable ? 'Día laborable' : 'Día no laborable'
+            });
+        }
+        
+        res.json({
+            tipo: 'sin_horario',
+            horario: null,
+            mensaje: 'El empleado no tiene horario asignado'
+        });
+        
+    } catch (error) {
+        console.error('❌ Error obteniendo horario del día:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// ============================================
+// 14. REPORTE DE HORARIOS POR EMPLEADO
+// ============================================
+app.get('/api/reportes/horarios-empleados', async (req, res) => {
+    try {
+        const { fecha_corte } = req.query;
+        const fecha = fecha_corte || new Date().toISOString().split('T')[0];
+        
+        const [reporte] = await promisePool.query(
+            `SELECT 
+                e.EmpId,
+                e.DocID as Codigo,
+                e.Nombres,
+                e.Apellidos,
+                e.Tipo_EmpId,
+                t.Nombre as TipoEmpleado,
+                COALESCE(e.HorarioId, t.HorarioId) as HorarioIdAplicado,
+                h.Nombre as HorarioNombre,
+                h.Codigo as HorarioCodigo,
+                h.HoraEntrada,
+                h.HoraSalida,
+                h.HoraAlmuerzoInicio,
+                h.HoraAlmuerzoFin,
+                h.ToleranciaEntrada,
+                h.DiasLaborales,
+                CASE 
+                    WHEN e.HorarioId IS NOT NULL AND e.HorarioPersonalizado = TRUE THEN 'Personalizado'
+                    WHEN e.HorarioId IS NOT NULL THEN 'Asignado'
+                    WHEN t.HorarioId IS NOT NULL THEN 'Por Tipo'
+                    ELSE 'Sin Horario'
+                END as TipoAsignacion
+             FROM empleado e
+             LEFT JOIN tipo_empleado t ON e.Tipo_EmpId = t.Tipo_EmpId
+             LEFT JOIN horarios h ON COALESCE(e.HorarioId, t.HorarioId) = h.HorarioId
+             WHERE e.fecha_renuncia IS NULL
+             ORDER BY e.Nombres`,
+            []
+        );
+        
+        // Estadísticas
+        const totalEmpleados = reporte.length;
+        const conHorario = reporte.filter(r => r.HorarioIdAplicado).length;
+        const sinHorario = totalEmpleados - conHorario;
+        const horariosUtilizados = [...new Set(reporte.filter(r => r.HorarioIdAplicado).map(r => r.HorarioNombre))];
+        
+        res.json({
+            datos: reporte,
+            estadisticas: {
+                totalEmpleados,
+                conHorario,
+                sinHorario,
+                porcentajeCobertura: totalEmpleados > 0 ? (conHorario / totalEmpleados * 100).toFixed(2) : 0,
+                horariosUtilizados
+            }
+        });
+        
+    } catch (error) {
+        console.error('❌ Error generando reporte:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// ============================================
+// 15. VALIDAR SI ES HORARIO LABORAL
+// ============================================
+app.get('/api/horarios/validar/:horarioId/:fecha', async (req, res) => {
+    try {
+        const { horarioId, fecha } = req.params;
+        
+        const [horario] = await promisePool.query(
+            'SELECT * FROM horarios WHERE HorarioId = ?',
+            [horarioId]
+        );
+        
+        if (horario.length === 0) {
+            return res.status(404).json({ error: 'Horario no encontrado' });
+        }
+        
+        const diaSemana = new Date(fecha).getDay();
+        const diaNumero = diaSemana === 0 ? 7 : diaSemana;
+        const diasLaborales = horario[0].DiasLaborales || '1,2,3,4,5';
+        const esLaborable = diasLaborales.split(',').includes(diaNumero.toString());
+        
+        // Verificar feriado
+        const [feriado] = await promisePool.query(
+            'SELECT * FROM feriados WHERE Fecha = ? AND EsLaborable = FALSE',
+            [fecha]
+        );
+        
+        const esFeriado = feriado.length > 0;
+        
+        res.json({
+            fecha,
+            horario: horario[0],
+            esLaborable: esLaborable && !esFeriado,
+            esFeriado,
+            mensaje: esFeriado ? 'Feriado no laborable' : (esLaborable ? 'Día laborable' : 'Día no laborable según horario')
+        });
+        
+    } catch (error) {
+        console.error('❌ Error validando horario:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+/////////////////////////////////////////////////
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 // ============================================
 // ENDPOINTS PARA CATEGORÍAS
 // ============================================
@@ -863,7 +1746,7 @@ const verificarToken = (req, res, next) => {
 };
 
 // Rutas protegidas (requieren token)
-app.get('/api/empleados', verificarToken, async (req, res) => {
+app.get('/api/empleados', async (req, res) => {
     try {
         const [rows] = await promisePool.query(
             'SELECT EmpId, Nombres, Apellidos, DocID, telefono FROM empleado'
@@ -874,7 +1757,7 @@ app.get('/api/empleados', verificarToken, async (req, res) => {
     }
 });
 
-app.get('/api/cargos-empleado', verificarToken, async (req, res) => {
+app.get('/api/cargos-empleado', async (req, res) => {
     try {
         const [rows] = await promisePool.query('SELECT * FROM cargo_empleado');
         res.json(rows);
@@ -883,7 +1766,7 @@ app.get('/api/cargos-empleado', verificarToken, async (req, res) => {
     }
 });
 
-app.get('/api/tipos-empleado', verificarToken, async (req, res) => {
+app.get('/api/tipos-empleado', async (req, res) => {
     try {
         const [rows] = await promisePool.query('SELECT * FROM tipo_empleado');
         res.json(rows);
