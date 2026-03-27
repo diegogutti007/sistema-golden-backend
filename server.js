@@ -4552,7 +4552,7 @@ app.get('/api/empleados/documento/:codigo', async (req, res) => {
   }
 });
 
-
+/* 
 
 // Marcar entrada
 app.post('/api/marcaciones/entrada', validarUbicacionMarcacion, async (req, res) => {
@@ -4923,6 +4923,435 @@ app.get('/api/marcaciones/hoy/:codigo', async (req, res) => {
       message: error.message
     });
   }
+}); */
+
+// Importar moment-timezone al inicio del archivo
+const moment = require('moment-timezone');
+
+// Función para obtener la fecha y hora actual de Perú
+const getHoraPeru = () => {
+    return moment().tz('America/Lima');
+};
+
+// Función para obtener fecha en formato YYYY-MM-DD (Perú)
+const getFechaPeru = () => {
+    return getHoraPeru().format('YYYY-MM-DD');
+};
+
+// Función para obtener hora en formato HH:MM:SS (Perú)
+const getHoraPeruFormato = () => {
+    return getHoraPeru().format('HH:mm:ss');
+};
+
+// Marcar entrada
+app.post('/api/marcaciones/entrada', validarUbicacionMarcacion, async (req, res) => {
+  try {
+    const { codigo_empleado, dispositivo } = req.body;
+    
+    // 🔴 CORRECCIÓN: Usar hora de Perú
+    const fecha = getFechaPeru();
+    const hora = getHoraPeruFormato();
+    const fechaHoraCompleta = getHoraPeru().format('YYYY-MM-DD HH:mm:ss');
+    
+    const ipCliente = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+
+    console.log("📝 Registrando entrada:", { codigo_empleado, fecha, hora, fechaHoraCompleta });
+
+    // Buscar empleado por DocID (cédula)
+    const [empleado] = await promisePool.query(
+      `SELECT EmpId, Nombres, Apellidos, DocID 
+             FROM empleado 
+             WHERE DocID = ? AND fecha_renuncia IS NULL`,
+      [codigo_empleado]
+    );
+
+    if (empleado.length === 0) {
+      return res.status(404).json({
+        error: 'Empleado no encontrado',
+        message: 'Código de empleado inválido o empleado inactivo'
+      });
+    }
+
+    const empId = empleado[0].EmpId;
+
+    // Verificar si ya tiene registro hoy (usando fecha de Perú)
+    const [asistencia] = await promisePool.query(
+      'SELECT AsistenciaID FROM asistencia WHERE EmpId = ? AND Fecha = ?',
+      [empId, fecha]
+    );
+
+    if (asistencia.length > 0) {
+      return res.status(400).json({
+        error: 'Registro duplicado',
+        message: 'Ya marcaste entrada hoy'
+      });
+    }
+
+    await promisePool.query('START TRANSACTION');
+
+    // Crear nuevo registro con hora de Perú
+    await promisePool.query(
+      `INSERT INTO asistencia 
+             (EmpId, Fecha, HoraEntrada, Estado, MetodoValidacion, IPAddress) 
+             VALUES (?, ?, ?, 'Incompleto', ?, ?)`,
+      [empId, fecha, hora, req.ubicacionValida.metodo, ipCliente]
+    );
+
+    // Registrar en historial con fecha/hora completa de Perú
+    await promisePool.query(
+      `INSERT INTO historial_marcaciones 
+             (EmpId, FechaHora, Tipo, IPAddress, Dispositivo, MetodoValidacion, DatosValidacion) 
+             VALUES (?, ?, 'Entrada', ?, ?, ?, ?)`,
+      [
+        empId,
+        fechaHoraCompleta,
+        ipCliente,
+        dispositivo || 'web',
+        req.ubicacionValida.metodo,
+        JSON.stringify(req.ubicacionValida)
+      ]
+    );
+
+    await promisePool.query('COMMIT');
+
+    console.log(`✅ Entrada registrada: ${empleado[0].Nombres} ${empleado[0].Apellidos} - ${hora} (Perú)`);
+
+    res.json({
+      success: true,
+      message: 'Entrada registrada correctamente',
+      empleado: `${empleado[0].Nombres} ${empleado[0].Apellidos}`,
+      hora,
+      fecha,
+      metodo: req.ubicacionValida.metodo
+    });
+
+  } catch (error) {
+    await promisePool.query('ROLLBACK');
+    console.error("❌ Error registrando entrada:", error);
+    res.status(500).json({
+      error: 'Error al registrar entrada',
+      message: error.message
+    });
+  }
+});
+
+// Marcar salida a almuerzo
+app.post('/api/marcaciones/salida-almuerzo', validarUbicacionMarcacion, async (req, res) => {
+  try {
+    const { codigo_empleado, dispositivo } = req.body;
+    
+    // 🔴 CORRECCIÓN: Usar hora de Perú
+    const fecha = getFechaPeru();
+    const hora = getHoraPeruFormato();
+    const fechaHoraCompleta = getHoraPeru().format('YYYY-MM-DD HH:mm:ss');
+    
+    const ipCliente = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+
+    const [empleado] = await promisePool.query(
+      'SELECT EmpId, Nombres, Apellidos FROM empleado WHERE DocID = ?',
+      [codigo_empleado]
+    );
+
+    if (empleado.length === 0) {
+      return res.status(404).json({ error: 'Empleado no encontrado' });
+    }
+
+    const empId = empleado[0].EmpId;
+
+    // Verificar registro de hoy
+    const [asistencia] = await promisePool.query(
+      `SELECT * FROM asistencia 
+             WHERE EmpId = ? AND Fecha = ?`,
+      [empId, fecha]
+    );
+
+    if (asistencia.length === 0) {
+      return res.status(400).json({
+        error: 'Registro no encontrado',
+        message: 'Debes marcar entrada primero'
+      });
+    }
+
+    if (asistencia[0].HoraSalidaAlmuerzo) {
+      return res.status(400).json({
+        error: 'Registro duplicado',
+        message: 'Ya marcaste salida a almuerzo hoy'
+      });
+    }
+
+    await promisePool.query('START TRANSACTION');
+
+    // Actualizar registro con hora de Perú
+    await promisePool.query(
+      `UPDATE asistencia 
+             SET HoraSalidaAlmuerzo = ?, MetodoValidacion = ? 
+             WHERE EmpId = ? AND Fecha = ?`,
+      [hora, req.ubicacionValida.metodo, empId, fecha]
+    );
+
+    // Registrar en historial con fecha/hora completa de Perú
+    await promisePool.query(
+      `INSERT INTO historial_marcaciones 
+             (EmpId, FechaHora, Tipo, IPAddress, Dispositivo, MetodoValidacion, DatosValidacion) 
+             VALUES (?, ?, 'SalidaAlmuerzo', ?, ?, ?, ?)`,
+      [
+        empId,
+        fechaHoraCompleta,
+        ipCliente,
+        dispositivo || 'web',
+        req.ubicacionValida.metodo,
+        JSON.stringify(req.ubicacionValida)
+      ]
+    );
+
+    await promisePool.query('COMMIT');
+
+    res.json({
+      success: true,
+      message: 'Salida a almuerzo registrada',
+      hora,
+      fecha,
+      metodo: req.ubicacionValida.metodo
+    });
+
+  } catch (error) {
+    await promisePool.query('ROLLBACK');
+    console.error(error);
+    res.status(500).json({ error: 'Error al registrar salida a almuerzo' });
+  }
+});
+
+// Marcar regreso de almuerzo
+app.post('/api/marcaciones/regreso-almuerzo', validarUbicacionMarcacion, async (req, res) => {
+  try {
+    const { codigo_empleado, dispositivo } = req.body;
+    
+    // 🔴 CORRECCIÓN: Usar hora de Perú
+    const fecha = getFechaPeru();
+    const hora = getHoraPeruFormato();
+    const fechaHoraCompleta = getHoraPeru().format('YYYY-MM-DD HH:mm:ss');
+    
+    const ipCliente = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+
+    const [empleado] = await promisePool.query(
+      'SELECT EmpId FROM empleado WHERE DocID = ?',
+      [codigo_empleado]
+    );
+
+    if (empleado.length === 0) {
+      return res.status(404).json({ error: 'Empleado no encontrado' });
+    }
+
+    const empId = empleado[0].EmpId;
+
+    const [asistencia] = await promisePool.query(
+      `SELECT * FROM asistencia 
+             WHERE EmpId = ? AND Fecha = ?`,
+      [empId, fecha]
+    );
+
+    if (asistencia.length === 0) {
+      return res.status(400).json({
+        error: 'Registro no encontrado',
+        message: 'Debes marcar entrada primero'
+      });
+    }
+
+    if (!asistencia[0].HoraSalidaAlmuerzo) {
+      return res.status(400).json({
+        error: 'Secuencia incorrecta',
+        message: 'Debes marcar salida a almuerzo primero'
+      });
+    }
+
+    if (asistencia[0].HoraRegresoAlmuerzo) {
+      return res.status(400).json({
+        error: 'Registro duplicado',
+        message: 'Ya marcaste regreso de almuerzo hoy'
+      });
+    }
+
+    await promisePool.query('START TRANSACTION');
+
+    // Actualizar registro con hora de Perú
+    await promisePool.query(
+      `UPDATE asistencia 
+             SET HoraRegresoAlmuerzo = ?, MetodoValidacion = ? 
+             WHERE EmpId = ? AND Fecha = ?`,
+      [hora, req.ubicacionValida.metodo, empId, fecha]
+    );
+
+    // Registrar en historial con fecha/hora completa de Perú
+    await promisePool.query(
+      `INSERT INTO historial_marcaciones 
+             (EmpId, FechaHora, Tipo, IPAddress, Dispositivo, MetodoValidacion, DatosValidacion) 
+             VALUES (?, ?, 'RegresoAlmuerzo', ?, ?, ?, ?)`,
+      [
+        empId,
+        fechaHoraCompleta,
+        ipCliente,
+        dispositivo || 'web',
+        req.ubicacionValida.metodo,
+        JSON.stringify(req.ubicacionValida)
+      ]
+    );
+
+    await promisePool.query('COMMIT');
+
+    res.json({
+      success: true,
+      message: 'Regreso de almuerzo registrado',
+      hora,
+      fecha,
+      metodo: req.ubicacionValida.metodo
+    });
+
+  } catch (error) {
+    await promisePool.query('ROLLBACK');
+    console.error(error);
+    res.status(500).json({ error: 'Error al registrar regreso de almuerzo' });
+  }
+});
+
+// Marcar salida
+app.post('/api/marcaciones/salida', validarUbicacionMarcacion, async (req, res) => {
+  try {
+    const { codigo_empleado, dispositivo } = req.body;
+    
+    // 🔴 CORRECCIÓN: Usar hora de Perú
+    const fecha = getFechaPeru();
+    const hora = getHoraPeruFormato();
+    const fechaHoraCompleta = getHoraPeru().format('YYYY-MM-DD HH:mm:ss');
+    
+    const ipCliente = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+
+    const [empleado] = await promisePool.query(
+      'SELECT EmpId, Nombres, Apellidos FROM empleado WHERE DocID = ?',
+      [codigo_empleado]
+    );
+
+    if (empleado.length === 0) {
+      return res.status(404).json({ error: 'Empleado no encontrado' });
+    }
+
+    const empId = empleado[0].EmpId;
+
+    // Obtener registro actual
+    const [asistencia] = await promisePool.query(
+      `SELECT * FROM asistencia 
+             WHERE EmpId = ? AND Fecha = ?`,
+      [empId, fecha]
+    );
+
+    if (asistencia.length === 0) {
+      return res.status(400).json({
+        error: 'Registro no encontrado',
+        message: 'No hay registro de entrada hoy'
+      });
+    }
+
+    const reg = asistencia[0];
+
+    // Calcular horas trabajadas usando la fecha de Perú
+    const entrada = new Date(`${fecha}T${reg.HoraEntrada}`);
+    const salidaAlmuerzo = reg.HoraSalidaAlmuerzo ? new Date(`${fecha}T${reg.HoraSalidaAlmuerzo}`) : null;
+    const regresoAlmuerzo = reg.HoraRegresoAlmuerzo ? new Date(`${fecha}T${reg.HoraRegresoAlmuerzo}`) : null;
+    const salida = new Date(`${fecha}T${hora}`);
+
+    let horasTrabajadas = 0;
+
+    if (entrada && salida) {
+      if (salidaAlmuerzo && regresoAlmuerzo) {
+        // Restar tiempo de almuerzo
+        const tiempoManana = (salidaAlmuerzo - entrada) / (1000 * 60 * 60);
+        const tiempoTarde = (salida - regresoAlmuerzo) / (1000 * 60 * 60);
+        horasTrabajadas = tiempoManana + tiempoTarde;
+      } else {
+        horasTrabajadas = (salida - entrada) / (1000 * 60 * 60);
+      }
+    }
+
+    await promisePool.query('START TRANSACTION');
+
+    // Actualizar registro con hora de Perú
+    await promisePool.query(
+      `UPDATE asistencia 
+             SET HoraSalida = ?, HorasTrabajadas = ?, Estado = 'Completo', MetodoValidacion = ?
+             WHERE EmpId = ? AND Fecha = ?`,
+      [hora, horasTrabajadas.toFixed(2), req.ubicacionValida.metodo, empId, fecha]
+    );
+
+    // Registrar en historial con fecha/hora completa de Perú
+    await promisePool.query(
+      `INSERT INTO historial_marcaciones 
+             (EmpId, FechaHora, Tipo, IPAddress, Dispositivo, MetodoValidacion, DatosValidacion) 
+             VALUES (?, ?, 'Salida', ?, ?, ?, ?)`,
+      [
+        empId,
+        fechaHoraCompleta,
+        ipCliente,
+        dispositivo || 'web',
+        req.ubicacionValida.metodo,
+        JSON.stringify(req.ubicacionValida)
+      ]
+    );
+
+    await promisePool.query('COMMIT');
+
+    res.json({
+      success: true,
+      message: 'Salida registrada correctamente',
+      empleado: `${empleado[0].Nombres} ${empleado[0].Apellidos}`,
+      horasTrabajadas: horasTrabajadas.toFixed(2),
+      hora,
+      fecha,
+      metodo: req.ubicacionValida.metodo
+    });
+
+  } catch (error) {
+    await promisePool.query('ROLLBACK');
+    console.error(error);
+    res.status(500).json({ error: 'Error al registrar salida' });
+  }
+});
+
+// Obtener registro del día para un empleado
+app.get('/api/marcaciones/hoy/:codigo', async (req, res) => {
+  try {
+    const { codigo } = req.params;
+    
+    // 🔴 CORRECCIÓN: Usar fecha de Perú
+    const fecha = getFechaPeru();
+
+    const [resultados] = await promisePool.query(
+      `SELECT a.*, e.Nombres, e.Apellidos, e.DocID
+             FROM asistencia a
+             INNER JOIN empleado e ON a.EmpId = e.EmpId
+             WHERE e.DocID = ? AND a.Fecha = ?`,
+      [codigo, fecha]
+    );
+
+    res.json(resultados[0] || null);
+
+  } catch (error) {
+    console.error("❌ Error obteniendo registro:", error);
+    res.status(500).json({
+      error: 'Error al obtener registro',
+      message: error.message
+    });
+  }
+});
+
+// Endpoint para verificar la hora del servidor (útil para debugging)
+app.get('/api/hora-servidor', (req, res) => {
+  const horaPeru = getHoraPeru();
+  res.json({
+    horaPeru: horaPeru.format('YYYY-MM-DD HH:mm:ss'),
+    fechaPeru: getFechaPeru(),
+    horaPeruFormato: getHoraPeruFormato(),
+    zonaHoraria: 'America/Lima',
+    timestamp: horaPeru.valueOf()
+  });
 });
 
 // Obtener configuración de la empresa
