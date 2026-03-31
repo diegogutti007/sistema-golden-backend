@@ -2592,7 +2592,7 @@ app.get("/api/caja/dinero-inicial", (req, res) => {
   console.log("💵 Buscando dinero inicial para:", fecha || "sin fecha");
 
   // Valor por defecto
-  let montoInicial = 500.00;
+  let montoInicial = 0;
 
   if (!fecha) {
     console.log("⚠️ Sin fecha, usando valor por defecto:", montoInicial);
@@ -2602,9 +2602,10 @@ app.get("/api/caja/dinero-inicial", (req, res) => {
   const sql = `
     SELECT dinero_final_caja as monto 
     FROM cierre_caja 
-    WHERE estado = 'CORRECTO'
-    ORDER BY fecha DESC, fecha_creacion DESC 
-    LIMIT 1
+    WHERE fecha = DATE_SUB(?, INTERVAL 1 DAY)
+      AND estado = 'CORRECTO'
+    ORDER BY fecha_creacion DESC 
+    LIMIT 1  
   `;
 
   pool.query(sql, [fecha], (err, resultados) => {
