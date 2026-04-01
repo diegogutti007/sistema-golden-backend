@@ -1766,7 +1766,7 @@ app.get('/api/cargos-empleado', async (req, res) => {
     }
 });
 
-app.get('/api/tipos-empleado', async (req, res) => {
+app.get('/api/tipo-empleado', async (req, res) => {
     try {
         const [rows] = await promisePool.query('SELECT * FROM tipo_empleado');
         res.json(rows);
