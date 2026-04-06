@@ -2600,12 +2600,11 @@ app.get("/api/caja/dinero-inicial", (req, res) => {
   }
 
   const sql = `
-    SELECT dinero_final_caja as monto 
-    FROM cierre_caja 
-    WHERE fecha = DATE_SUB(?, INTERVAL 1 DAY)
-      AND estado = 'CORRECTO'
-    ORDER BY fecha_creacion DESC 
-    LIMIT 1  
+	  select dinero_inicial FROM cierre_caja
+    where DATE(fecha) <= ?
+    and estado = 'CORRECTO'
+    order by fecha desc
+    Limit 1;
   `;
 
   pool.query(sql, [fecha], (err, resultados) => {
