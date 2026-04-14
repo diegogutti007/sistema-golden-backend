@@ -1043,7 +1043,7 @@ app.get('/api/empleados/:id/horario-hoy', async (req, res) => {
         const [empleado] = await promisePool.query(
             `SELECT e.HorarioId, e.HorarioPersonalizado, h.*
              FROM empleado e
-             LEFT JOIN horarios h ON e.HorarioId = h.HorarioId
+             LEFT JOIN horarios h ON e  .HorarioId = h.HorarioId
              WHERE e.EmpId = ?`,
             [id]
         );
@@ -1848,6 +1848,28 @@ app.get('/api/listaempleado', (req, res) => {
 
 app.get('/api/listaempleadoactivo', (req, res) => {
   const query = `
+          SELECT e.EmpId, e.Nombres, e.Apellidos, e.DocID, 
+           e.Direccion, e.FechaNacimiento, e.Sueldo, e.fecha_ingreso, e.fecha_renuncia, t.Tipo_EmpId,
+           t.Descripcion AS TipoEmpleado, t.Comision, c.Cargo_EmpId, c.Descripcion
+        FROM empleado e
+        JOIN tipo_empleado t ON e.Tipo_EmpId = t.Tipo_EmpId
+        JOIN cargo_empleado c ON e.Cargo_EmpId = c.Cargo_EmpId
+        WHERE FECHA_RENUNCIA IS NULL and c.Cargo_EmpId not in ('GG','AD')
+        ORDER BY e.fecha_ingreso;
+  `;
+
+  pool.query(query, (err, results) => {
+    if (err) {
+      console.error("❌ Error al obtener empleados:", err);
+      return res.status(500).json({ error: "Error al obtener empleados" });
+    }
+    res.json(results);
+  });
+});
+
+
+app.get('/api/listaempleadoactivo_gasto', (req, res) => {
+  const query = `
         SELECT e.EmpId, e.Nombres, e.Apellidos, e.DocID, 
            e.Direccion, e.FechaNacimiento, e.Sueldo, e.fecha_ingreso, e.fecha_renuncia, t.Tipo_EmpId,
            t.Descripcion AS TipoEmpleado, t.Comision, c.Cargo_EmpId, c.Descripcion
@@ -1866,6 +1888,7 @@ app.get('/api/listaempleadoactivo', (req, res) => {
     res.json(results);
   });
 });
+
 
 // Modificar empleado
 app.put('/api/empleado/:id', (req, res) => {
@@ -4552,6 +4575,10 @@ app.get('/api/empleados/documento/:codigo', async (req, res) => {
   }
 });
 
+
+
+
+
 /* 
 
 // Marcar entrada
@@ -5490,7 +5517,34 @@ const authenticateToken = (req, res, next) => {
 app.use('/api', authenticateToken);
 
 
-
+// GET /api/auth/usuario/:username
+// Endpoint para obtener usuario por nombre de usuario
+app.get('/api/auth/usuario/:username', authenticateToken, async (req, res) => {
+    try {
+        const { username } = req.params;
+        
+        // Verificar que db esté definida
+        if (!db) {
+            console.error('Error: db no está definida');
+            return res.status(500).json({ error: 'Error de conexión a la base de datos' });
+        }
+        
+        // Consulta usando el pool de conexiones
+        const [usuarios] = await db.query(
+            'SELECT usuario_id, nombre, apellido, correo, rol, estado, usuario, telefono, direccion, doc_identidad FROM usuario WHERE usuario = ? AND estado = "activo"',
+            [username]
+        );
+        
+        if (usuarios.length === 0) {
+            return res.status(404).json({ error: 'Usuario no encontrado' });
+        }
+        
+        res.json(usuarios[0]);
+    } catch (error) {
+        console.error('Error en /api/auth/usuario/:username:', error);
+        res.status(500).json({ error: 'Error al obtener usuario: ' + error.message });
+    }
+});
 
 
 // 🔄 RUTA PARA CAMBIAR CONTRASEÑA DESDE EL PERFIL
