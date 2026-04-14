@@ -1870,13 +1870,13 @@ app.get('/api/listaempleadoactivo', (req, res) => {
 
 app.get('/api/listaempleadoactivo_gasto', (req, res) => {
   const query = `
-        SELECT e.EmpId, e.Nombres, e.Apellidos, e.DocID, 
+          SELECT e.EmpId, e.Nombres, e.Apellidos, e.DocID, 
            e.Direccion, e.FechaNacimiento, e.Sueldo, e.fecha_ingreso, e.fecha_renuncia, t.Tipo_EmpId,
            t.Descripcion AS TipoEmpleado, t.Comision, c.Cargo_EmpId, c.Descripcion
         FROM empleado e
         JOIN tipo_empleado t ON e.Tipo_EmpId = t.Tipo_EmpId
         JOIN cargo_empleado c ON e.Cargo_EmpId = c.Cargo_EmpId
-        WHERE FECHA_RENUNCIA IS NULL
+        WHERE FECHA_RENUNCIA IS NULL and c.Cargo_EmpId in ('GG','AD', 'GP')
         ORDER BY e.fecha_ingreso;
   `;
 
