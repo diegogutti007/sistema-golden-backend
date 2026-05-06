@@ -1889,6 +1889,99 @@ app.get('/api/listaempleadoactivo_gasto', (req, res) => {
   });
 });
 
+app.get('/api/horario/activos', (req, res) => {
+  const query = `
+    SELECT * 
+    FROM horarios 
+    WHERE Activo = 1 
+    ORDER BY Nombre
+  `;
+
+  pool.query(query, (err, results) => {
+    if (err) {
+      console.error("❌ Error al obtener horarios:", err);
+      return res.status(500).json({ error: "Error al obtener horarios" });
+    }
+
+    res.json(results);
+  });
+});
+
+
+// Endpoint para registro manual de asistencia
+app.post('/api/asistencia/registro-manual', (req, res) => {
+    const { 
+        empId, 
+        fecha, 
+        horaEntrada, 
+        horaSalidaAlmuerzo, 
+        horaRegresoAlmuerzo, 
+        horaSalida, 
+        observaciones,
+        metodoValidacion 
+    } = req.body;
+
+    // Validar campos requeridos
+    if (!empId || !fecha || !horaEntrada) {
+        return res.status(400).json({ 
+            message: 'Los campos empId, fecha y horaEntrada son obligatorios' 
+        });
+    }
+
+    // Query para insertar o actualizar el registro de asistencia
+    const query = `
+        INSERT INTO asistencia (
+            EmpId, 
+            Fecha, 
+            HoraEntrada, 
+            HoraSalidaAlmuerzo, 
+            HoraRegresoAlmuerzo, 
+            HoraSalida, 
+            Observaciones,
+            MetodoValidacion,
+            EsRegistroManual,
+            FechaRegistro
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, NOW())
+        ON DUPLICATE KEY UPDATE
+            HoraEntrada = IFNULL(VALUES(HoraEntrada), HoraEntrada),
+            HoraSalidaAlmuerzo = IFNULL(VALUES(HoraSalidaAlmuerzo), HoraSalidaAlmuerzo),
+            HoraRegresoAlmuerzo = IFNULL(VALUES(HoraRegresoAlmuerzo), HoraRegresoAlmuerzo),
+            HoraSalida = IFNULL(VALUES(HoraSalida), HoraSalida),
+            Observaciones = VALUES(Observaciones),
+            MetodoValidacion = VALUES(MetodoValidacion),
+            EsRegistroManual = 1,
+            FechaActualizacion = NOW()
+    `;
+
+    pool.query(
+        query, 
+        [
+            empId, 
+            fecha, 
+            horaEntrada, 
+            horaSalidaAlmuerzo || null, 
+            horaRegresoAlmuerzo || null, 
+            horaSalida || null, 
+            observaciones || null,
+            metodoValidacion || 'manual'
+        ], 
+        (err, result) => {
+            if (err) {
+                console.error('❌ Error al registrar asistencia:', err);
+                return res.status(500).json({ 
+                    message: 'Error al registrar asistencia',
+                    error: err.message 
+                });
+            }
+            
+            res.json({ 
+                message: 'Asistencia registrada correctamente',
+                id: result.insertId 
+            });
+        }
+    );
+});
+
 
 // Modificar empleado
 app.put('/api/empleado/:id', (req, res) => {
@@ -4065,6 +4158,7 @@ app.get("/api/venta/:id", (req, res) => {
       SELECT 
         d.DetalleID,
         a.ArticuloID,
+        d.EmpID,
         a.Nombre AS ArticuloNombre,
         d.Cantidad,
         d.PrecioUnitario,
@@ -4106,6 +4200,129 @@ app.get("/api/venta/:id", (req, res) => {
   });
 });
 
+// Crear un pool con promesas al inicio del archivo
+//const pool = require('./db'); // tu configuración actual
+//const promisePool = pool.promise();
+
+app.put("/api/venta/:id", async (req, res) => {
+  const { id } = req.params;
+  const { ClienteID, FechaVenta, Observaciones, Total, Detalles, Pagos } = req.body;
+
+  // Validaciones básicas
+  if (!ClienteID || !FechaVenta || !Detalles || !Pagos) {
+    return res.status(400).json({ error: "Faltan datos requeridos" });
+  }
+
+  const connection = await promisePool.getConnection();
+  
+  try {
+    await connection.beginTransaction();
+
+    // 1. Actualizar la venta principal
+    await connection.query(
+      `UPDATE venta 
+       SET ClienteID = ?, FechaVenta = ?, Observaciones = ?, Total = ? 
+       WHERE VentaID = ?`,
+      [ClienteID, FechaVenta, Observaciones, Total, id]
+    );
+
+    // 2. Eliminar detalles existentes
+    await connection.query("DELETE FROM venta_detalle WHERE VentaID = ?", [id]);
+
+    // 3. Insertar nuevos detalles
+    for (const detalle of Detalles) {
+      const { ArticuloID, Cantidad, PrecioUnitario, EmpID } = detalle;
+      
+      // Validar que el artículo existe
+      const [articuloCheck] = await connection.query(
+        "SELECT ArticuloID FROM articulo WHERE ArticuloID = ?",
+        [ArticuloID]
+      );
+      
+      if (articuloCheck.length === 0) {
+        throw new Error(`Artículo con ID ${ArticuloID} no existe`);
+      }
+
+      await connection.query(
+        `INSERT INTO venta_detalle (VentaID, ArticuloID, Cantidad, PrecioUnitario, EmpID)
+         VALUES (?, ?, ?, ?, ?)`,
+        [id, ArticuloID, Cantidad, PrecioUnitario, EmpID || null]
+      );
+    }
+
+    // 4. Eliminar pagos existentes
+    await connection.query("DELETE FROM venta_tipo_pago WHERE VentaID = ?", [id]);
+
+    // 5. Insertar nuevos pagos
+    for (const pago of Pagos) {
+      const { TipoPagoID, Monto } = pago;
+      
+      // Validar que el tipo de pago existe
+      const [tipoPagoCheck] = await connection.query(
+        "SELECT tipo_pago_id FROM tipo_pago WHERE tipo_pago_id = ?",
+        [TipoPagoID]
+      );
+      
+      if (tipoPagoCheck.length === 0) {
+        throw new Error(`Tipo de pago con ID ${TipoPagoID} no existe`);
+      }
+
+      await connection.query(
+        `INSERT INTO venta_tipo_pago (VentaID, tipo_pago_id, monto)
+         VALUES (?, ?, ?)`,
+        [id, TipoPagoID, Monto]
+      );
+    }
+
+    // Confirmar transacción
+    await connection.commit();
+    
+    // Obtener la venta actualizada
+    const [ventaResult] = await connection.query(
+      `SELECT v.*, CONCAT(c.Nombre, ' ', c.Apellido) AS ClienteNombre
+       FROM venta v
+       LEFT JOIN cliente c ON v.ClienteID = c.ClienteID
+       WHERE v.VentaID = ?`,
+      [id]
+    );
+    
+    // Obtener detalles actualizados
+    const [detallesResult] = await connection.query(
+      `SELECT d.*, a.Nombre AS ArticuloNombre
+       FROM venta_detalle d
+       JOIN articulo a ON d.ArticuloID = a.ArticuloID
+       WHERE d.VentaID = ?`,
+      [id]
+    );
+    
+    // Obtener pagos actualizados
+    const [pagosResult] = await connection.query(
+      `SELECT vp.*, tp.nombre AS TipoPago
+       FROM venta_tipo_pago vp
+       JOIN tipo_pago tp ON vp.tipo_pago_id = tp.tipo_pago_id
+       WHERE vp.VentaID = ?`,
+      [id]
+    );
+
+    res.json({
+      success: true,
+      message: "Venta actualizada correctamente",
+      venta: ventaResult[0],
+      detalles: detallesResult,
+      pagos: pagosResult
+    });
+
+  } catch (error) {
+    await connection.rollback();
+    console.error("❌ Error al actualizar venta:", error);
+    res.status(500).json({ 
+      error: "Error al actualizar venta", 
+      details: error.message 
+    });
+  } finally {
+    connection.release();
+  }
+});
 
 app.delete("/api/venta/:id", (req, res) => {
   const { id } = req.params;
