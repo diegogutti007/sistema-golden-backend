@@ -4470,7 +4470,501 @@ app.get("/api/comisiones/:empId", (req, res) => {
 
 
 
+// ============================================
+// ENDPOINTS PARA ESTADO DE RESULTADOS
+// ============================================
 
+// 1. Endpoint para obtener datos de un periodo específico
+app.get('/api/periodo/:periodo', async (req, res) => {
+    try {
+        const { periodo } = req.params;
+        
+        const query = `
+            SELECT
+                p.nombre,
+                p.periodo,
+                p.periodo_id,
+                COALESCE(v.ventasNetas, 0) AS ventasNetas,
+                COALESCE(g.gastos, 0) AS gastos,
+                COALESCE(v.ventasNetas, 0) - COALESCE(g.gastos, 0) AS utilidad
+            FROM periodo p
+            LEFT JOIN (
+                SELECT
+                    DATE_FORMAT(FechaVenta, '%Y%m') AS periodo,
+                    SUM(Total) AS ventasNetas
+                FROM venta
+                GROUP BY DATE_FORMAT(FechaVenta, '%Y%m')
+            ) v
+                ON v.periodo = p.periodo
+            LEFT JOIN (
+                SELECT
+                    periodo_id,
+                    SUM(monto) AS gastos
+                FROM gastos
+                WHERE categoria_id IN ('3','5')
+                GROUP BY periodo_id
+            ) g
+                ON g.periodo_id = p.periodo_id
+            WHERE p.periodo = ?
+            ORDER BY p.periodo
+        `;
+        
+        const [results] = await pool.execute(query, [periodo]);
+        
+        if (results.length === 0) {
+            return res.status(404).json({ 
+                success: false,
+                error: `No se encontraron datos para el periodo ${periodo}` 
+            });
+        }
+        
+        res.json({
+            success: true,
+            data: results[0]
+        });
+        
+    } catch (error) {
+        console.error('Error:', error);
+        res.status(500).json({ 
+            success: false,
+            error: 'Error al obtener los datos del periodo' 
+        });
+    }
+});
+
+// 2. Endpoint para obtener múltiples periodos
+app.get('/api/periodos/:periodos', async (req, res) => {
+    try {
+        const { periodos } = req.params;
+        const periodosArray = periodos.split(',');
+        const placeholders = periodosArray.map(() => '?').join(',');
+        
+        const query = `
+            SELECT
+                p.nombre,
+                p.periodo,
+                p.periodo_id,
+                COALESCE(v.ventasNetas, 0) AS ventasNetas,
+                COALESCE(g.gastos, 0) AS gastos,
+                COALESCE(v.ventasNetas, 0) - COALESCE(g.gastos, 0) AS utilidad
+            FROM periodo p
+            LEFT JOIN (
+                SELECT
+                    DATE_FORMAT(FechaVenta, '%Y%m') AS periodo,
+                    SUM(Total) AS ventasNetas
+                FROM venta
+                GROUP BY DATE_FORMAT(FechaVenta, '%Y%m')
+            ) v
+                ON v.periodo = p.periodo
+            LEFT JOIN (
+                SELECT
+                    periodo_id,
+                    SUM(monto) AS gastos
+                FROM gastos
+                WHERE categoria_id IN ('3','5')
+                GROUP BY periodo_id
+            ) g
+                ON g.periodo_id = p.periodo_id
+            WHERE p.periodo IN (${placeholders})
+            ORDER BY p.periodo
+        `;
+        
+        const [results] = await pool.execute(query, periodosArray);
+        
+        res.json({
+            success: true,
+            data: results
+        });
+        
+    } catch (error) {
+        console.error('Error:', error);
+        res.status(500).json({ 
+            success: false,
+            error: 'Error al obtener los datos de los periodos' 
+        });
+    }
+});
+
+app.get('/api/estado-resultados/:periodoActual/:periodoComparativo', (req, res) => {
+
+    const { periodoActual, periodoComparativo } = req.params;
+
+    const query = `
+        SELECT 
+            p.periodo,
+            p.nombre,
+            p.periodo_id,
+
+            COALESCE(v.ventasNetas, 0) AS ventasNetas,
+
+            0 AS otrosIngresosOperacionales,
+
+            COALESCE(cv.costoVentas, 0) AS costoVentas,
+
+            COALESCE(ga.gastosAdministrativos, 0) AS gastosAdministrativos,
+
+            COALESCE(gf.gastosFinancieros, 0) AS gastosFinancieros,
+
+            0 AS otrosIngresos,
+
+            0 AS otrosGastos
+
+        FROM periodo p
+
+        LEFT JOIN (
+            SELECT 
+                DATE_FORMAT(FechaVenta, '%Y%m') AS periodo,
+                SUM(Total) AS ventasNetas
+            FROM venta
+            GROUP BY DATE_FORMAT(FechaVenta, '%Y%m')
+        ) v
+            ON v.periodo = p.periodo
+
+        LEFT JOIN (
+            SELECT 
+                periodo_id,
+                SUM(monto) AS costoVentas
+            FROM gastos
+            WHERE categoria_id IN ('3', '5')
+            GROUP BY periodo_id
+        ) cv
+            ON cv.periodo_id = p.periodo_id
+
+        LEFT JOIN (
+            SELECT 
+                periodo_id,
+                SUM(monto) AS gastosAdministrativos
+            FROM gastos
+            WHERE categoria_id IN ('1','2','4','6','7','9','11','12')
+            GROUP BY periodo_id
+        ) ga
+            ON ga.periodo_id = p.periodo_id
+
+        LEFT JOIN (
+            SELECT 
+                periodo_id,
+                SUM(monto) AS gastosFinancieros
+            FROM gastos
+            WHERE categoria_id = '8'
+            GROUP BY periodo_id
+        ) gf
+            ON gf.periodo_id = p.periodo_id
+
+        WHERE p.periodo IN (?, ?)
+
+        ORDER BY p.periodo
+    `;
+
+    pool.query(
+        query,
+        [periodoActual, periodoComparativo],
+        (err, results) => {
+
+            if (err) {
+
+                console.error('Error detallado:', err);
+
+                return res.status(500).json({
+                    success: false,
+                    error: 'Error al obtener estado de resultados',
+                    details: err.message
+                });
+            }
+
+            if (!results || results.length === 0) {
+
+                return res.status(404).json({
+                    success: false,
+                    error: 'No se encontraron datos'
+                });
+            }
+
+            const formatoResultados = {
+                periodoActual: null,
+                periodoComparativo: null
+            };
+
+            results.forEach(row => {
+
+                const ventasNetas =
+                    Number(row.ventasNetas || 0);
+
+                const otrosIngresosOperacionales =
+                    Number(row.otrosIngresosOperacionales || 0);
+
+                const totalIngresosOperacionales =
+                    ventasNetas + otrosIngresosOperacionales;
+
+                const costoVentas =
+                    Number(row.costoVentas || 0);
+
+                const utilidadBruta =
+                    totalIngresosOperacionales - costoVentas;
+
+                const gastosAdministrativos =
+                    Number(row.gastosAdministrativos || 0);
+
+                const gastosFinancieros =
+                    Number(row.gastosFinancieros || 0);
+
+                const totalGastosOperativos =
+                    gastosAdministrativos + gastosFinancieros;
+
+                const otrosIngresos =
+                    Number(row.otrosIngresos || 0);
+
+                const otrosGastos =
+                    Number(row.otrosGastos || 0);
+
+                const utilidadOperativa =
+                    utilidadBruta
+                    - totalGastosOperativos
+                    + otrosIngresos
+                    - otrosGastos;
+
+                const participacionTrabajadores =
+                    utilidadOperativa > 0
+                        ? utilidadOperativa * 0.10
+                        : 0;
+
+                const utilidadAntesImpuestos =
+                    utilidadOperativa - participacionTrabajadores;
+
+                const impuestoRenta =
+                    utilidadAntesImpuestos > 0
+                        ? utilidadAntesImpuestos * 0.30
+                        : 0;
+
+                const utilidadNeta =
+                    utilidadAntesImpuestos - impuestoRenta;
+
+                const datos = {
+
+                    ingresosOperacionales: {
+                        ventasNetas,
+                        otrosIngresosOperacionales,
+                        totalIngresosOperacionales
+                    },
+
+                    costoVentas,
+
+                    utilidadBruta,
+
+                    gastosOperativos: {
+                        gastosAdministrativos,
+                        gastosFinancieros,
+                        totalGastosOperativos
+                    },
+
+                    otrosIngresos,
+
+                    otrosGastos,
+
+                    utilidadOperativa,
+
+                    participacionTrabajadores,
+
+                    utilidadAntesImpuestos,
+
+                    impuestoRenta,
+
+                    utilidadNeta
+                };
+
+                if (row.periodo === periodoActual) {
+                    formatoResultados.periodoActual = datos;
+                }
+
+                if (row.periodo === periodoComparativo) {
+                    formatoResultados.periodoComparativo = datos;
+                }
+
+            });
+
+            res.json({
+                success: true,
+                data: formatoResultados
+            });
+
+        }
+    );
+
+});
+
+// 3. Endpoint principal para estado de resultados completo (actual vs comparativo)
+/* app.get('/api/estado-resultados/:periodoActual/:periodoComparativo', async (req, res) => {
+    try {
+        const { periodoActual, periodoComparativo } = req.params;
+        
+        // Query más completa para estado de resultados
+        const query = `
+         SELECT 
+                p.periodo,
+                p.nombre,
+                -- Ventas e Ingresos
+                COALESCE(v.ventasNetas, 0) AS ventasNetas,
+                -- COALESCE(v.otrosIngresos, 0) AS otrosIngresosOperacionales,
+                '' AS otrosIngresosOperacionales,
+                -- Costos (asumiendo que el costo es un % de ventas o tienes tabla de costos)
+                COALESCE(gv.costosVentas, 0) AS costoVentas,
+                -- Gastos por categoría
+                -- COALESCE(gv.costosVentas, 0) AS gastosVentas,
+                COALESCE(ga.gastosAdmin, 0) AS gastosAdministrativos,
+                COALESCE(gf.gastosFinancieros, 0) AS gastosFinancieros,
+                -- Otros ingresos/gastos
+                -- COALESCE(oi.otrosIngresos, 0) AS otrosIngresos,
+                -- COALESCE(og.otrosGastos, 0) AS otrosGastos,
+                ''  AS otrosIngresos,
+                ''  AS otrosGastos,   
+                -- Para cálculos de participación e impuestos
+                (SELECT SUM(monto) FROM gastos WHERE periodo_id = p.periodo_id AND categoria_id IN ('1','2','3','4','5','6','7','9','11','12')) AS totalGastos 
+            FROM periodo p
+            -- Ventas e ingresos operacionales
+            LEFT JOIN (
+                SELECT 
+                    DATE_FORMAT(FechaVenta, '%Y%m') AS periodo,
+                    SUM(Total) AS ventasNetas,
+                    0 AS otrosIngresos
+                FROM venta
+                GROUP BY DATE_FORMAT(FechaVenta, '%Y%m')
+            ) v ON v.periodo = p.periodo
+            -- Costos de ventas (categoría 3)
+            LEFT JOIN (
+                SELECT 
+                    periodo_id,
+                    SUM(monto) AS costosVentas
+                FROM gastos
+                WHERE categoria_id in ('3','5')
+                GROUP BY periodo_id
+            ) gv ON gv.periodo_id = p.periodo_id
+            
+            -- Gastos administrativos (categoría 5)
+            LEFT JOIN (
+                SELECT 
+                    periodo_id,
+                    SUM(monto) AS gastosAdmin
+                FROM gastos
+                WHERE categoria_id in ('1','2','4','6','7','9','11','12')
+                GROUP BY periodo_id
+            ) ga ON ga.periodo_id = p.periodo_id
+            
+            -- Gastos financieros (categoría 6)
+            LEFT JOIN (
+                SELECT 
+                    periodo_id,
+                    SUM(monto) AS gastosFinancieros
+                FROM gastos
+                WHERE categoria_id = '8'
+                GROUP BY periodo_id
+            ) gf ON gf.periodo_id = p.periodo_id
+            WHERE p.periodo IN (?, ?)
+            ORDER BY p.periodo
+        `;
+        
+        const [results] = await pool.execute(query, [periodoActual, periodoComparativo]);
+        
+        if (results.length === 0) {
+            return res.status(404).json({
+                success: false,
+                error: 'No se encontraron datos para los periodos seleccionados'
+            });
+        }
+        
+        // Procesar y formatear los datos para el frontend
+        const formatoResultados = {
+            periodoActual: null,
+            periodoComparativo: null
+        };
+        
+        results.forEach(row => {
+            const ventasTotales = row.ventasNetas + row.otrosIngresosOperacionales;
+            const totalGastosOperativos = row.gastosVentas + row.gastosAdministrativos + row.gastosFinancieros;
+            const utilidadBruta = ventasTotales - row.costoVentas;
+            const utilidadOperativa = utilidadBruta - totalGastosOperativos + row.otrosIngresos - row.otrosGastos;
+            const participacionTrabajadores = utilidadOperativa * 0.1;
+            const utilidadAntesImpuestos = utilidadOperativa - participacionTrabajadores;
+            const impuestoRenta = utilidadAntesImpuestos * 0.3;
+            const utilidadNeta = utilidadAntesImpuestos - impuestoRenta;
+            
+            const datos = {
+                ingresosOperacionales: {
+                    ventasNetas: row.ventasNetas,
+                    otrosIngresosOperacionales: row.otrosIngresosOperacionales,
+                    totalIngresosOperacionales: ventasTotales
+                },
+                costoVentas: row.costoVentas,
+                utilidadBruta: utilidadBruta,
+                gastosOperativos: {
+                    gastosVentas: row.gastosVentas,
+                    gastosAdministrativos: row.gastosAdministrativos,
+                    gastosFinancieros: row.gastosFinancieros,
+                    totalGastosOperativos: totalGastosOperativos
+                },
+                otrosIngresos: row.otrosIngresos,
+                otrosGastos: row.otrosGastos,
+                utilidadOperativa: utilidadOperativa,
+                participacionTrabajadores: participacionTrabajadores,
+                utilidadAntesImpuestos: utilidadAntesImpuestos,
+                impuestoRenta: impuestoRenta,
+                utilidadNeta: utilidadNeta
+            };
+            
+            if (row.periodo === periodoActual) {
+                formatoResultados.periodoActual = datos;
+            } else if (row.periodo === periodoComparativo) {
+                formatoResultados.periodoComparativo = datos;
+            }
+        });
+        
+        res.json({
+            success: true,
+            data: formatoResultados
+        });
+        
+    } catch (error) {
+        console.error('Error detallado:', error);
+        res.status(500).json({ 
+            success: false,
+            error: 'Error al obtener el estado de resultados',
+            details: error.message
+        });
+    }
+}); */
+
+// 4. Endpoint para obtener lista de periodos disponibles
+app.get('/api/periodos-disponibles', (req, res) => {
+
+    const query = `
+        SELECT DISTINCT
+            periodo,
+            periodo_id,
+            nombre
+        FROM periodo
+        ORDER BY periodo DESC
+    `;
+
+    pool.query(query, (error, results) => {
+
+        if (error) {
+
+            console.error('Error:', error);
+
+            return res.status(500).json({
+                success: false,
+                error: 'Error al obtener los periodos',
+                details: error.message
+            });
+
+        }
+
+        return res.json({
+            success: true,
+            data: results || []
+        });
+
+    });
+
+});
 
 
 
