@@ -4625,7 +4625,7 @@ app.get('/api/estado-resultados/:periodoActual/:periodoComparativo', (req, res) 
                 periodo_id,
                 SUM(monto) AS costoVentas
             FROM gastos
-            WHERE categoria_id IN ('3', '5')
+            WHERE categoria_id IN ('3')
             GROUP BY periodo_id
         ) cv
             ON cv.periodo_id = p.periodo_id
@@ -4635,7 +4635,7 @@ app.get('/api/estado-resultados/:periodoActual/:periodoComparativo', (req, res) 
                 periodo_id,
                 SUM(monto) AS gastosAdministrativos
             FROM gastos
-            WHERE categoria_id IN ('1','2','4','6','7','9','11','12')
+            WHERE categoria_id IN ('1','2','4','5','6','7','9','11','12')
             GROUP BY periodo_id
         ) ga
             ON ga.periodo_id = p.periodo_id
