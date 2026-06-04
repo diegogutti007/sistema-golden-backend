@@ -4635,7 +4635,7 @@ app.get('/api/estado-resultados/:periodoActual/:periodoComparativo', (req, res) 
                 periodo_id,
                 SUM(monto) AS gastosAdministrativos
             FROM gastos
-            WHERE categoria_id IN ('1','2','4','5','6','7','9','11','12')
+            WHERE categoria_id IN ('1','2','4','5','6','7','9','11','12','13')
             GROUP BY periodo_id
         ) ga
             ON ga.periodo_id = p.periodo_id
@@ -5131,6 +5131,45 @@ app.get('/api/categorias-gasto/:id', (req, res) => {
         });
     });
 });
+
+// Este es NUEVO - Para ver los gastos individuales al hacer clic en una tarjeta
+app.get('/api/gastos-por-categoria', (req, res) => {
+    const { categoria_id, periodo_id, limite } = req.query;
+    
+    let query = `
+        SELECT 
+            g.gasto_id,
+            g.descripcion,
+            g.monto,
+            g.fecha_gasto,
+            g.observaciones
+        FROM gastos g
+        WHERE 1=1
+    `;
+    
+    const params = [];
+    
+    if (categoria_id) {
+        query += ` AND g.categoria_id = ?`;
+        params.push(categoria_id);
+    }
+    
+    if (periodo_id) {
+        query += ` AND g.periodo_id = ?`;
+        params.push(periodo_id);
+    }
+    
+    query += ` ORDER BY g.fecha_gasto DESC LIMIT 10`;
+    
+    pool.query(query, params, (err, results) => {
+        if (err) {
+            return res.status(500).json({ success: false, error: 'Error al obtener gastos' });
+        }
+        
+        res.json({ success: true, data: results });
+    });
+});
+
 
 
 
