@@ -1206,6 +1206,209 @@ app.get('/api/horarios/validar/:horarioId/:fecha', async (req, res) => {
 
 
 
+// ============================================
+// ENDPOINTS PARA PAGOS DE PERSONAL (CORREGIDO)
+// ============================================
+
+// Obtener resumen de pagos por empleado
+// Obtener resumen de pagos por empleado
+app.get('/api/pagos-personal', (req, res) => {
+    const { periodo_id, empleado_id } = req.query;
+    
+    let sqlQuery = `
+        SELECT 
+            e.EmpId,
+            e.Nombres,
+            e.Apellidos,
+            e.DocID,
+            COALESCE(e.Sueldo, 0) AS sueldo_base,
+            e.Cargo_EmpId,
+            COALESCE((
+                SELECT SUM(g.monto) 
+                FROM gastos g 
+                WHERE g.categoria_id = 2 
+                AND g.EmpId = e.EmpId 
+                AND g.periodo_id = ?
+            ), 0) AS total_sueldo,
+            COALESCE((
+                SELECT SUM(g.monto) 
+                FROM gastos g 
+                WHERE g.categoria_id = 11 
+                AND g.EmpId = e.EmpId 
+                AND g.periodo_id = ?
+            ), 0) AS total_bonos,
+            COALESCE((
+                SELECT SUM(g.monto) 
+                FROM gastos g 
+                WHERE g.categoria_id = 12 
+                AND g.EmpId = e.EmpId 
+                AND g.periodo_id = ?
+            ), 0) AS total_comisiones,
+            (
+                SELECT COUNT(*) 
+                FROM gastos g 
+                WHERE g.categoria_id IN (2, 11, 12) 
+                AND g.EmpId = e.EmpId 
+                AND g.periodo_id = ?
+            ) AS cantidad_pagos
+        FROM empleado e
+        WHERE (e.fecha_renuncia IS NULL OR e.fecha_renuncia > CURDATE())
+    `;
+    
+    const params = [periodo_id, periodo_id, periodo_id, periodo_id];
+    
+    if (empleado_id) {
+        sqlQuery += ` AND e.EmpId = ?`;
+        params.push(empleado_id);
+    }
+    
+    sqlQuery += ` ORDER BY e.Apellidos, e.Nombres`;
+    
+    pool.query(sqlQuery, params, (err, results) => {
+        if (err) {
+            console.error('Error en /api/pagos-personal:', err);
+            return res.status(500).json({ 
+                success: false, 
+                error: 'Error al obtener pagos de personal' 
+            });
+        }
+        
+        // Procesar cada empleado para asegurar valores numéricos
+        const empleadosProcesados = results.map(emp => {
+            const totalSueldo = Number(emp.total_sueldo) || 0;
+            const totalBonos = Number(emp.total_bonos) || 0;
+            const totalComisiones = Number(emp.total_comisiones) || 0;
+            const sueldoBase = Number(emp.sueldo_base) || 0;
+            
+            const totalRecibido = totalSueldo + totalBonos + totalComisiones;
+            const sueldoPendiente = sueldoBase - totalSueldo;
+            const porcentaje = sueldoBase > 0 ? (totalRecibido / sueldoBase) * 100 : 0;
+            
+            return {
+                ...emp,
+                total_sueldo: totalSueldo,
+                total_bonos: totalBonos,
+                total_comisiones: totalComisiones,
+                total_recibido: totalRecibido,
+                sueldo_pendiente: sueldoPendiente,
+                porcentaje: porcentaje,
+                estado: totalRecibido >= sueldoBase ? "Completado" : "Pendiente"
+            };
+        });
+        
+        // Calcular totales generales
+        const totales = empleadosProcesados.reduce((acc, emp) => {
+            acc.total_sueldos += emp.total_sueldo;
+            acc.total_bonos += emp.total_bonos;
+            acc.total_comisiones += emp.total_comisiones;
+            acc.total_general += emp.total_recibido;
+            return acc;
+        }, { total_sueldos: 0, total_bonos: 0, total_comisiones: 0, total_general: 0 });
+        
+        res.json({
+            success: true,
+            data: {
+                empleados: empleadosProcesados,
+                resumen: {
+                    total_sueldos: totales.total_sueldos,
+                    total_bonos: totales.total_bonos,
+                    total_comisiones: totales.total_comisiones,
+                    total_general: totales.total_general,
+                    total_empleados: empleadosProcesados.length,
+                    empleados_con_pagos: empleadosProcesados.filter(e => e.cantidad_pagos > 0).length
+                }
+            }
+        });
+    });
+});
+
+// Obtener detalle de pagos por empleado
+app.get('/api/pagos-personal/detalle/:empleado_id', (req, res) => {
+    const { empleado_id } = req.params;
+    const { periodo_id } = req.query;
+    
+    let sqlQuery = `
+        SELECT 
+            g.gasto_id,
+            g.descripcion,
+            g.monto,
+            g.fecha_gasto,
+            g.observaciones,
+            cg.nombre AS categoria,
+            cg.categoria_id,
+            p.periodo,
+            p.nombre AS periodo_nombre
+        FROM gastos g
+        JOIN categoria_gasto cg ON g.categoria_id = cg.categoria_id
+        JOIN periodo p ON g.periodo_id = p.periodo_id
+        WHERE g.EmpId = ?
+        AND g.categoria_id IN (2, 11, 12)
+    `;
+    
+    const params = [empleado_id];
+    
+    if (periodo_id) {
+        sqlQuery += ` AND g.periodo_id = ?`;
+        params.push(periodo_id);
+    }
+    
+    sqlQuery += ` ORDER BY g.fecha_gasto DESC, g.gasto_id DESC`;
+    
+    pool.query(sqlQuery, params, (err, results) => {
+        if (err) {
+            console.error('Error en /api/pagos-personal/detalle/:empleado_id:', err);
+            return res.status(500).json({ 
+                success: false, 
+                error: 'Error al obtener detalle de pagos' 
+            });
+        }
+        
+        res.json({
+            success: true,
+            data: results
+        });
+    });
+});
+
+// Obtener resumen por tipo de pago
+app.get('/api/pagos-personal/resumen-tipos', (req, res) => {
+    const { periodo_id } = req.query;
+    
+    let sqlQuery = `
+        SELECT 
+            cg.categoria_id,
+            cg.nombre AS tipo_pago,
+            COUNT(DISTINCT g.EmpId) AS empleados_afectados,
+            COUNT(g.gasto_id) AS total_transacciones,
+            SUM(g.monto) AS total_monto,
+            AVG(g.monto) AS promedio_monto
+        FROM gastos g
+        JOIN categoria_gasto cg ON g.categoria_id = cg.categoria_id
+        WHERE g.categoria_id IN (2, 11, 12)
+        AND g.periodo_id = ?
+        GROUP BY cg.categoria_id, cg.nombre
+        ORDER BY cg.categoria_id
+    `;
+    
+    pool.query(sqlQuery, [periodo_id], (err, results) => {
+        if (err) {
+            console.error('Error en /api/pagos-personal/resumen-tipos:', err);
+            return res.status(500).json({ 
+                success: false, 
+                error: 'Error al obtener resumen por tipos' 
+            });
+        }
+        
+        res.json({
+            success: true,
+            data: results
+        });
+    });
+});
+
+
+
+
 
 
 
