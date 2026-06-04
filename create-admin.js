@@ -12,7 +12,7 @@ async function createAdminUser() {
       port: 3306,
     });
 
-    const password = 'Golnail1'; // Cambia esta contraseña
+    const password = 'Pichona.01'; // Cambia esta contraseña
     const hashedPassword = await bcrypt.hash(password, 10);
 
     const [result] = await connection.execute(

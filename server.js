@@ -4791,6 +4791,350 @@ app.get('/api/estado-resultados/:periodoActual/:periodoComparativo', (req, res) 
 
 });
 
+
+// ============================================
+// ENDPOINTS PARA PRESUPUESTOS
+// (Estilo pool.query con callback)
+// ============================================
+
+// Obtener periodos
+app.get('/api/periodos-lista', (req, res) => {
+    const query = `
+        SELECT 
+            periodo_id,
+            periodo,
+            nombre
+        FROM periodo
+        ORDER BY periodo DESC
+    `;
+
+    pool.query(query, (err, results) => {
+        if (err) {
+            console.error('Error en /api/periodos-lista:', err);
+            return res.status(500).json({ 
+                success: false, 
+                error: 'Error al obtener periodos' 
+            });
+        }
+
+        res.json({
+            success: true,
+            data: results
+        });
+    });
+});
+
+// Obtener presupuestos y alertas
+/* app.get('/api/presupuestos-alertas', (req, res) => {
+    const { periodo_id } = req.query;
+    
+    if (!periodo_id) {
+        return res.status(400).json({
+            success: false,
+            error: 'Se requiere periodo_id'
+        });
+    }
+    
+    const query = `
+        SELECT 
+            cg.categoria_id,
+            cg.nombre,
+            cg.descripcion,
+            cg.presupuesto_mensual,
+            cg.presupuesto_anual,
+            cg.alerta_porcentaje,
+            cg.activo,
+            COALESCE(SUM(g.monto), 0) AS gasto_real_mensual,
+            COUNT(g.gasto_id) AS cantidad_gastos
+        FROM categoria_gasto cg
+        LEFT JOIN gastos g ON g.categoria_id = cg.categoria_id AND g.periodo_id = ?
+        WHERE cg.activo = 1
+        GROUP BY cg.categoria_id, cg.nombre, cg.descripcion, 
+                 cg.presupuesto_mensual, cg.presupuesto_anual, 
+                 cg.alerta_porcentaje, cg.activo
+        ORDER BY cg.nombre
+    `;
+
+    pool.query(query, [periodo_id], (err, categorias) => {
+        if (err) {
+            console.error('Error en /api/presupuestos-alertas:', err);
+            return res.status(500).json({ 
+                success: false, 
+                error: 'Error al obtener datos de presupuestos' 
+            });
+        }
+
+        // Calcular estados y resumen
+        let totalPresupuesto = 0;
+        let totalGastos = 0;
+        let categoriasAlerta = 0;
+        
+        categorias.forEach(item => {
+            totalPresupuesto += item.presupuesto_mensual || 0;
+            totalGastos += item.gasto_real_mensual || 0;
+            
+            if (item.presupuesto_mensual > 0) {
+                item.porcentaje_ejecucion = (item.gasto_real_mensual / item.presupuesto_mensual) * 100;
+                item.diferencia = item.presupuesto_mensual - item.gasto_real_mensual;
+                item.alerta_activa = item.porcentaje_ejecucion >= item.alerta_porcentaje;
+                item.estado = item.alerta_activa ? 'ALERTA' : 
+                              item.porcentaje_ejecucion >= item.alerta_porcentaje * 0.7 ? 'CERCANO' : 'NORMAL';
+                
+                if (item.alerta_activa) categoriasAlerta++;
+            } else {
+                item.porcentaje_ejecucion = 0;
+                item.diferencia = -item.gasto_real_mensual;
+                item.alerta_activa = false;
+                item.estado = 'SIN_PRESUPUESTO';
+            }
+        });
+        
+        res.json({
+            success: true,
+            data: {
+                periodo_id: periodo_id,
+                resumen: {
+                    total_presupuesto: totalPresupuesto,
+                    total_gastos: totalGastos,
+                    diferencia: totalPresupuesto - totalGastos,
+                    porcentaje_ejecucion: totalPresupuesto > 0 ? (totalGastos / totalPresupuesto) * 100 : 0,
+                    categorias_alerta: categoriasAlerta,
+                    total_categorias: categorias.length
+                },
+                categorias: categorias
+            }
+        });
+    });
+}); */
+
+// Obtener presupuestos y alertas
+// Obtener presupuestos y alertas
+app.get('/api/presupuestos-alertas', (req, res) => {
+    const { periodo_id } = req.query;
+    
+    console.log('Periodo seleccionado:', periodo_id);
+    
+    if (!periodo_id) {
+        return res.status(400).json({
+            success: false,
+            error: 'Se requiere periodo_id'
+        });
+    }
+    
+    const query = `
+        SELECT 
+            cg.categoria_id,
+            cg.nombre,
+            cg.descripcion,
+            cg.presupuesto_mensual,
+            cg.presupuesto_anual,
+            cg.alerta_porcentaje,
+            cg.activo,
+            (
+                SELECT COALESCE(SUM(g.monto), 0)
+                FROM gastos g 
+                WHERE g.categoria_id = cg.categoria_id 
+                AND g.periodo_id = ?
+            ) AS gasto_real_mensual,
+            (
+                SELECT COUNT(*)
+                FROM gastos g 
+                WHERE g.categoria_id = cg.categoria_id 
+                AND g.periodo_id = ?
+            ) AS cantidad_gastos
+        FROM categoria_gasto cg
+        WHERE cg.activo = 1
+        ORDER BY cg.nombre
+    `;
+
+    pool.query(query, [periodo_id, periodo_id], (err, categorias) => {
+        if (err) {
+            console.error('Error:', err);
+            return res.status(500).json({ 
+                success: false, 
+                error: 'Error al obtener datos' 
+            });
+        }
+        
+        console.log('Categorías encontradas:', categorias.length);
+        
+        // Calcular totales y procesar cada categoría
+        let totalPresupuesto = 0;
+        let totalGastos = 0;
+        
+        const categoriasProcesadas = categorias.map(cat => {
+            // Asegurar valores numéricos
+            const presupuesto = Number(cat.presupuesto_mensual) || 0;
+            const gastoReal = Number(cat.gasto_real_mensual) || 0;
+            const alertaPorcentaje = Number(cat.alerta_porcentaje) || 80;
+            
+            console.log(`Categoría: ${cat.nombre}, Presupuesto: ${presupuesto}, Gasto: ${gastoReal}`);
+            
+            totalPresupuesto += presupuesto;
+            totalGastos += gastoReal;
+            
+            let porcentajeEjecucion = 0;
+            let diferencia = 0;
+            let estado = 'SIN_PRESUPUESTO';
+            
+            if (presupuesto > 0) {
+                porcentajeEjecucion = (gastoReal / presupuesto) * 100;
+                diferencia = presupuesto - gastoReal;
+                
+                // Lógica de estados CORREGIDA
+                if (porcentajeEjecucion > 100) {
+                    estado = 'SOBREPASADO';
+                } else if (porcentajeEjecucion === 100) {
+                    estado = 'COMPLETADO';
+                } else if (porcentajeEjecucion >= alertaPorcentaje) {
+                    estado = 'CERCANO';
+                } else {
+                    estado = 'NORMAL';
+                }
+                
+                console.log(`Porcentaje: ${porcentajeEjecucion}%, Estado: ${estado}`);
+            }
+            
+            return {
+                ...cat,
+                presupuesto_mensual: presupuesto,
+                gasto_real_mensual: gastoReal,
+                porcentaje_ejecucion: parseFloat(porcentajeEjecucion.toFixed(2)),
+                diferencia: parseFloat(diferencia.toFixed(2)),
+                estado: estado
+            };
+        });
+        
+        console.log('Total Presupuesto:', totalPresupuesto);
+        console.log('Total Gastos:', totalGastos);
+        
+        const porcentajeGlobal = totalPresupuesto > 0 ? (totalGastos / totalPresupuesto) * 100 : 0;
+        const categoriasSobrepasadas = categoriasProcesadas.filter(c => c.estado === 'SOBREPASADO').length;
+        
+        res.json({
+            success: true,
+            data: {
+                periodo_id: periodo_id,
+                resumen: {
+                    total_presupuesto: totalPresupuesto,
+                    total_gastos: totalGastos,
+                    diferencia: totalPresupuesto - totalGastos,
+                    porcentaje_ejecucion: parseFloat(porcentajeGlobal.toFixed(2)),
+                    categorias_alerta: categoriasSobrepasadas
+                },
+                categorias: categoriasProcesadas
+            }
+        });
+    });
+});
+
+// Actualizar presupuesto de una categoría
+app.put('/api/categorias-gasto/:id/presupuesto', (req, res) => {
+    const { id } = req.params;
+    const { presupuesto_mensual, presupuesto_anual, alerta_porcentaje } = req.body;
+    
+    const query = `
+        UPDATE categoria_gasto 
+        SET presupuesto_mensual = ?,
+            presupuesto_anual = ?,
+            alerta_porcentaje = ?,
+            fecha_actualizacion = NOW()
+        WHERE categoria_id = ?
+    `;
+    
+    pool.query(query, [
+        presupuesto_mensual || 0,
+        presupuesto_anual || 0,
+        alerta_porcentaje || 80,
+        id
+    ], (err, result) => {
+        if (err) {
+            console.error('Error en /api/categorias-gasto/:id/presupuesto:', err);
+            return res.status(500).json({ 
+                success: false, 
+                error: 'Error al actualizar presupuesto' 
+            });
+        }
+        
+        res.json({
+            success: true,
+            message: 'Presupuesto actualizado exitosamente'
+        });
+    });
+});
+
+// Obtener todas las categorías (para combos)
+app.get('/api/categorias-gasto-todas', (req, res) => {
+    const query = `
+        SELECT 
+            categoria_id,
+            nombre,
+            presupuesto_mensual,
+            alerta_porcentaje
+        FROM categoria_gasto
+        WHERE activo = 1
+        ORDER BY nombre
+    `;
+    
+    pool.query(query, (err, results) => {
+        if (err) {
+            console.error('Error en /api/categorias-gasto-todas:', err);
+            return res.status(500).json({ 
+                success: false, 
+                error: 'Error al obtener categorías' 
+            });
+        }
+        
+        res.json({
+            success: true,
+            data: results
+        });
+    });
+});
+
+// Obtener una categoría específica
+app.get('/api/categorias-gasto/:id', (req, res) => {
+    const { id } = req.params;
+    
+    const query = `
+        SELECT 
+            categoria_id,
+            nombre,
+            descripcion,
+            presupuesto_mensual,
+            presupuesto_anual,
+            alerta_porcentaje,
+            activo
+        FROM categoria_gasto
+        WHERE categoria_id = ?
+    `;
+    
+    pool.query(query, [id], (err, results) => {
+        if (err) {
+            console.error('Error en /api/categorias-gasto/:id:', err);
+            return res.status(500).json({ 
+                success: false, 
+                error: 'Error al obtener categoría' 
+            });
+        }
+        
+        if (results.length === 0) {
+            return res.status(404).json({
+                success: false,
+                error: 'Categoría no encontrada'
+            });
+        }
+        
+        res.json({
+            success: true,
+            data: results[0]
+        });
+    });
+});
+
+
+
+
 // 3. Endpoint principal para estado de resultados completo (actual vs comparativo)
 /* app.get('/api/estado-resultados/:periodoActual/:periodoComparativo', async (req, res) => {
     try {
