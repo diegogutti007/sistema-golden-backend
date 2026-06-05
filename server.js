@@ -1223,7 +1223,6 @@ app.get('/api/pagos-personal', (req, res) => {
     e.DocID,
     COALESCE(e.Sueldo, 0) AS sueldo_base,
     e.Cargo_EmpId,
-    e.fecha_renuncia,
     COALESCE((
         SELECT SUM(g.monto) 
         FROM gastos g 
