@@ -1216,43 +1216,52 @@ app.get('/api/pagos-personal', (req, res) => {
     const { periodo_id, empleado_id } = req.query;
     
     let sqlQuery = `
-        SELECT 
-            e.EmpId,
-            e.Nombres,
-            e.Apellidos,
-            e.DocID,
-            COALESCE(e.Sueldo, 0) AS sueldo_base,
-            e.Cargo_EmpId,
-            COALESCE((
-                SELECT SUM(g.monto) 
-                FROM gastos g 
-                WHERE g.categoria_id = 2 
-                AND g.EmpId = e.EmpId 
-                AND g.periodo_id = ?
-            ), 0) AS total_sueldo,
-            COALESCE((
-                SELECT SUM(g.monto) 
-                FROM gastos g 
-                WHERE g.categoria_id = 11 
-                AND g.EmpId = e.EmpId 
-                AND g.periodo_id = ?
-            ), 0) AS total_bonos,
-            COALESCE((
-                SELECT SUM(g.monto) 
-                FROM gastos g 
-                WHERE g.categoria_id = 12 
-                AND g.EmpId = e.EmpId 
-                AND g.periodo_id = ?
-            ), 0) AS total_comisiones,
-            (
-                SELECT COUNT(*) 
-                FROM gastos g 
-                WHERE g.categoria_id IN (2, 11, 12) 
-                AND g.EmpId = e.EmpId 
-                AND g.periodo_id = ?
-            ) AS cantidad_pagos
-        FROM empleado e
-        WHERE (e.fecha_renuncia IS NULL OR e.fecha_renuncia > CURDATE())
+  SELECT 
+    e.EmpId,
+    e.Nombres,
+    e.Apellidos,
+    e.DocID,
+    COALESCE(e.Sueldo, 0) AS sueldo_base,
+    e.Cargo_EmpId,
+    e.fecha_renuncia,
+    COALESCE((
+        SELECT SUM(g.monto) 
+        FROM gastos g 
+        WHERE g.categoria_id = 2 
+        AND g.EmpId = e.EmpId 
+        AND g.periodo_id = ?
+    ), 0) AS total_sueldo,
+    COALESCE((
+        SELECT SUM(g.monto) 
+        FROM gastos g 
+        WHERE g.categoria_id = 11 
+        AND g.EmpId = e.EmpId 
+        AND g.periodo_id = ?
+    ), 0) AS total_bonos,
+    COALESCE((
+        SELECT SUM(g.monto) 
+        FROM gastos g 
+        WHERE g.categoria_id = 12 
+        AND g.EmpId = e.EmpId 
+        AND g.periodo_id = ?
+    ), 0) AS total_comisiones,
+    (
+        SELECT COUNT(*) 
+        FROM gastos g 
+        WHERE g.categoria_id IN (2, 11, 12) 
+        AND g.EmpId = e.EmpId 
+        AND g.periodo_id = ?
+    ) AS cantidad_pagos
+FROM empleado e
+WHERE (e.fecha_renuncia IS NULL OR e.fecha_renuncia > CURDATE())
+   OR EXISTS (
+       SELECT 1 
+       FROM gastos g 
+       WHERE g.categoria_id IN (2, 11, 12) 
+       AND g.EmpId = e.EmpId 
+       AND g.periodo_id = ?
+   )
+ORDER BY e.fecha_renuncia IS NULL DESC, e.Apellidos, e.Nombres
     `;
     
     const params = [periodo_id, periodo_id, periodo_id, periodo_id];
