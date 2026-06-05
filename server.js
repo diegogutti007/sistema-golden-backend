@@ -1212,7 +1212,7 @@ app.get('/api/horarios/validar/:horarioId/:fecha', async (req, res) => {
 
 // Obtener resumen de pagos por empleado
 // Obtener resumen de pagos por empleado
-app.get('/api/pagos-personal', (req, res) => {
+/* app.get('/api/pagos-personal', (req, res) => {
     const { periodo_id, empleado_id } = req.query;
     
     let sqlQuery = `
@@ -1328,7 +1328,160 @@ ORDER BY e.fecha_renuncia IS NULL DESC, e.Apellidos, e.Nombres
             }
         });
     });
+}); */
+
+
+// Obtener resumen de pagos por empleado
+app.get('/api/pagos-personal', (req, res) => {
+    const { periodo_id, empleado_id } = req.query;
+    
+    const periodoId = Number(periodo_id);
+    
+    let sqlQuery = `
+        SELECT 
+            e.EmpId,
+            e.Nombres,
+            e.Apellidos,
+            e.DocID,
+            COALESCE(e.Sueldo, 0) AS sueldo_base,
+            e.Cargo_EmpId,
+            e.fecha_renuncia,
+            COALESCE((
+                SELECT SUM(g.monto) 
+                FROM gastos g 
+                WHERE g.categoria_id = 2 
+                AND g.EmpId = e.EmpId 
+                AND g.periodo_id = ?
+            ), 0) AS total_sueldo,
+            COALESCE((
+                SELECT SUM(g.monto) 
+                FROM gastos g 
+                WHERE g.categoria_id = 11 
+                AND g.EmpId = e.EmpId 
+                AND g.periodo_id = ?
+            ), 0) AS total_bonos,
+            COALESCE((
+                SELECT SUM(g.monto) 
+                FROM gastos g 
+                WHERE g.categoria_id = 12 
+                AND g.EmpId = e.EmpId 
+                AND g.periodo_id = ?
+            ), 0) AS total_comisiones,
+            (
+                SELECT COUNT(*) 
+                FROM gastos g 
+                WHERE g.categoria_id IN (2, 11, 12) 
+                AND g.EmpId = e.EmpId 
+                AND g.periodo_id = ?
+            ) AS cantidad_pagos
+        FROM empleado e
+        WHERE (e.fecha_renuncia IS NULL OR e.fecha_renuncia > CURDATE())
+           OR EXISTS (
+               SELECT 1 
+               FROM gastos g 
+               WHERE g.categoria_id IN (2, 11, 12) 
+               AND g.EmpId = e.EmpId 
+               AND g.periodo_id = ?
+           )
+    `;
+    
+    // 5 parámetros para los SELECTS + 1 para el EXISTS = 6 parámetros
+    const params = [periodoId, periodoId, periodoId, periodoId, periodoId, periodoId];
+    
+    if (empleado_id) {
+        sqlQuery += ` AND e.EmpId = ?`;
+        params.push(empleado_id);
+    }
+    
+    sqlQuery += ` ORDER BY e.fecha_renuncia IS NULL DESC, e.Apellidos, e.Nombres`;
+    
+    pool.query(sqlQuery, params, (err, results) => {
+        if (err) {
+            console.error('Error en /api/pagos-personal:', err);
+            return res.status(500).json({ 
+                success: false, 
+                error: 'Error al obtener pagos de personal',
+                details: err.message
+            });
+        }
+        
+        // Procesar cada empleado
+        const empleadosProcesados = results.map(emp => {
+            const totalSueldo = Number(emp.total_sueldo) || 0;
+            const totalBonos = Number(emp.total_bonos) || 0;
+            const totalComisiones = Number(emp.total_comisiones) || 0;
+            const sueldoBase = Number(emp.sueldo_base) || 0;
+            
+            const totalRecibido = totalSueldo + totalBonos + totalComisiones;
+            const sueldoPendiente = sueldoBase - totalSueldo;
+            const porcentaje = sueldoBase > 0 ? (totalRecibido / sueldoBase) * 100 : 0;
+            
+            // Determinar estado del empleado
+            let estadoEmpleado = 'ACTIVO';
+            let esInactivoConPagos = false;
+            
+            if (emp.fecha_renuncia) {
+                const fechaRenuncia = new Date(emp.fecha_renuncia);
+                const hoy = new Date();
+                if (fechaRenuncia <= hoy) {
+                    estadoEmpleado = 'INACTIVO';
+                    if (totalRecibido > 0) {
+                        esInactivoConPagos = true;
+                    }
+                }
+            }
+            
+            return {
+                EmpId: emp.EmpId,
+                Nombres: emp.Nombres,
+                Apellidos: emp.Apellidos,
+                DocID: emp.DocID,
+                sueldo_base: sueldoBase,
+                total_sueldo: totalSueldo,
+                total_bonos: totalBonos,
+                total_comisiones: totalComisiones,
+                total_recibido: totalRecibido,
+                sueldo_pendiente: sueldoPendiente,
+                cantidad_pagos: Number(emp.cantidad_pagos) || 0,
+                porcentaje: parseFloat(porcentaje.toFixed(2)),
+                estado_pago: totalRecibido >= sueldoBase ? "Completado" : "Pendiente",
+                estado_empleado: estadoEmpleado,
+                es_inactivo_con_pagos: esInactivoConPagos,
+                fecha_renuncia: emp.fecha_renuncia
+            };
+        });
+        
+        // Calcular totales
+        let totalSueldos = 0;
+        let totalBonos = 0;
+        let totalComisiones = 0;
+        let totalGeneral = 0;
+        
+        empleadosProcesados.forEach(emp => {
+            totalSueldos += emp.total_sueldo;
+            totalBonos += emp.total_bonos;
+            totalComisiones += emp.total_comisiones;
+            totalGeneral += emp.total_recibido;
+        });
+        
+        res.json({
+            success: true,
+            data: {
+                empleados: empleadosProcesados,
+                resumen: {
+                    total_sueldos: totalSueldos,
+                    total_bonos: totalBonos,
+                    total_comisiones: totalComisiones,
+                    total_general: totalGeneral,
+                    total_empleados: empleadosProcesados.length,
+                    empleados_activos: empleadosProcesados.filter(e => e.estado_empleado === 'ACTIVO').length,
+                    empleados_inactivos_con_pagos: empleadosProcesados.filter(e => e.es_inactivo_con_pagos).length
+                }
+            }
+        });
+    });
 });
+
 
 // Obtener detalle de pagos por empleado
 app.get('/api/pagos-personal/detalle/:empleado_id', (req, res) => {
