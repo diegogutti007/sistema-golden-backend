@@ -1216,7 +1216,7 @@ app.get('/api/pagos-personal', (req, res) => {
     const { periodo_id, empleado_id } = req.query;
     
     let sqlQuery = `
-  SELECT 
+          SELECT 
     e.EmpId,
     e.Nombres,
     e.Apellidos,
