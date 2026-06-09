@@ -1199,6 +1199,52 @@ app.get('/api/horarios/validar/:horarioId/:fecha', async (req, res) => {
         res.status(500).json({ error: error.message });
     }
 });
+
+
+
+
+// Obtener todos los horarios disponibles (sin autenticación)
+app.get('/api/horarios-lista', (req, res) => {
+    const sqlQuery = `
+        SELECT 
+            HorarioId,
+            Codigo,
+            Nombre,
+            Descripcion,
+            TIME_FORMAT(HoraEntrada, '%H:%i') AS HoraEntrada,
+            TIME_FORMAT(HoraSalida, '%H:%i') AS HoraSalida,
+            TIME_FORMAT(HoraAlmuerzoInicio, '%H:%i') AS HoraAlmuerzoInicio,
+            TIME_FORMAT(HoraAlmuerzoFin, '%H:%i') AS HoraAlmuerzoFin,
+            ToleranciaEntrada,
+            ToleranciaSalida,
+            HorasLaborales,
+            DiasLaborales,
+            Activo,
+            EsTurnoNoche,
+            TieneAlmuerzo
+        FROM horarios
+        WHERE Activo = 1
+        ORDER BY HoraEntrada ASC
+    `;
+    
+    pool.query(sqlQuery, (err, results) => {
+        if (err) {
+            console.error('Error en /api/horarios-lista:', err);
+            return res.status(500).json({ 
+                success: false, 
+                error: 'Error al obtener la lista de horarios' 
+            });
+        }
+        
+        res.json({ 
+            success: true, 
+            data: results 
+        });
+    });
+});
+
+
+
 /////////////////////////////////////////////////
 
 
@@ -2271,79 +2317,487 @@ app.get('/api/horario/activos', (req, res) => {
   });
 });
 
+// Obtener un registro de asistencia para editar
+app.get('/api/asistencia/registro/:id', (req, res) => {
+    const { id } = req.params;
+    
+    const query = `
+        SELECT 
+            a.*,
+            e.Nombres,
+            e.Apellidos,
+            e.DocID
+        FROM asistencia a
+        JOIN empleado e ON a.EmpId = e.EmpId
+        WHERE a.AsistenciaID = ?
+    `;
+    
+    pool.query(query, [id], (err, results) => {
+        if (err) {
+            console.error('Error:', err);
+            return res.status(500).json({ success: false, message: 'Error al obtener registro' });
+        }
+        if (results.length === 0) {
+            return res.status(404).json({ success: false, message: 'Registro no encontrado' });
+        }
+        res.json({ success: true, data: results[0] });
+    });
+});
+
+// Actualizar un registro de asistencia existente
+app.put('/api/asistencia/registro/:id', (req, res) => {
+    const { id } = req.params;
+    const {
+        horaEntrada,
+        horaSalidaAlmuerzo,
+        horaRegresoAlmuerzo,
+        horaSalida,
+        observaciones
+    } = req.body;
+    
+    // Primero obtener el registro para obtener el HorarioAplicadoId y EmpId
+    const getRegistroQuery = `
+        SELECT a.*, e.HorarioId 
+        FROM asistencia a
+        JOIN empleado e ON a.EmpId = e.EmpId
+        WHERE a.AsistenciaID = ?
+    `;
+    
+    pool.query(getRegistroQuery, [id], (err, results) => {
+        if (err) {
+            console.error('Error:', err);
+            return res.status(500).json({ success: false, message: 'Error al obtener registro' });
+        }
+        
+        if (results.length === 0) {
+            return res.status(404).json({ success: false, message: 'Registro no encontrado' });
+        }
+        
+        const registro = results[0];
+        
+        // Obtener horario del empleado con TODOS los datos incluyendo tolerancias
+        const getHorarioQuery = `
+            SELECT 
+                h.HorasLaborales, 
+                h.HoraEntrada, 
+                h.HoraSalida,
+                h.ToleranciaEntrada,
+                h.ToleranciaSalida
+            FROM horarios h
+            WHERE h.HorarioId = ?
+        `;
+        
+        pool.query(getHorarioQuery, [registro.HorarioAplicadoId], (err2, horarioResult) => {
+            if (err2) {
+                console.error('Error:', err2);
+                return res.status(500).json({ success: false, message: 'Error al obtener horario' });
+            }
+            
+            const horario = horarioResult[0] || { 
+                HorasLaborales: 8,
+                ToleranciaEntrada: 0,
+                ToleranciaSalida: 0
+            };
+            
+            const horasLaborales = parseFloat(horario.HorasLaborales) || 8;
+            const toleranciaEntrada = horario.ToleranciaEntrada || 0;
+            const toleranciaSalida = horario.ToleranciaSalida || 0;
+            
+            console.log('=== EDITAR ASISTENCIA ===');
+            console.log(`Horario ID: ${registro.HorarioAplicadoId}`);
+            console.log(`Tolerancia entrada: ${toleranciaEntrada} minutos`);
+            console.log(`Tolerancia salida: ${toleranciaSalida} minutos`);
+            
+            // Función para convertir hora a minutos
+            const horaToMinutos = (horaStr) => {
+                if (!horaStr) return null;
+                const [horas, minutos] = horaStr.split(':').map(Number);
+                return (horas * 60) + minutos;
+            };
+            
+            // ==================== CÁLCULO DE HORAS TRABAJADAS ====================
+            let horasTrabajadas = 0;
+            let horasExtras = 0;
+            let estado = 'Incompleto';
+            
+            const entrada = horaToMinutos(horaEntrada || registro.HoraEntrada);
+            const salida = horaToMinutos(horaSalida || registro.HoraSalida);
+            const salidaAlm = horaToMinutos(horaSalidaAlmuerzo || registro.HoraSalidaAlmuerzo);
+            const regresoAlm = horaToMinutos(horaRegresoAlmuerzo || registro.HoraRegresoAlmuerzo);
+            
+            if (entrada && salida) {
+                let totalMinutos = salida - entrada;
+                if (salidaAlm && regresoAlm) {
+                    totalMinutos -= (regresoAlm - salidaAlm);
+                }
+                horasTrabajadas = parseFloat((totalMinutos / 60).toFixed(2));
+                
+                // Calcular horas extras (solo si supera las horas laborales)
+                horasExtras = Math.max(0, horasTrabajadas - horasLaborales);
+                horasExtras = parseFloat(horasExtras.toFixed(2));
+                
+                // Determinar estado
+                estado = horasTrabajadas >= horasLaborales * 0.7 ? 'Completo' : 'Incompleto';
+                
+                console.log(`Horas trabajadas: ${horasTrabajadas}`);
+                console.log(`Horas laborales: ${horasLaborales}`);
+                console.log(`Horas extras: ${horasExtras}`);
+                console.log(`Estado: ${estado}`);
+            } else if (entrada && !salida) {
+                estado = 'Incompleto';
+                console.log(`Estado: Incompleto (solo entrada)`);
+            }
+            
+            // ==================== CÁLCULO DE TARDANZA (USANDO TOLERANCIA DEL HORARIO) ====================
+            let esTardanza = 0;
+            let minutosTardanza = 0;
+            
+            console.log('\n=== CÁLCULO DE TARDANZA EN EDICIÓN ===');
+            console.log(`Hora entrada: ${horaEntrada || registro.HoraEntrada}`);
+            console.log(`Horario entrada esperado: ${horario.HoraEntrada}`);
+            console.log(`Tolerancia entrada: ${toleranciaEntrada} minutos`);
+            
+            if (entrada && horario.HoraEntrada) {
+                const horarioEntradaMinutos = horaToMinutos(horario.HoraEntrada);
+                const minutosReal = entrada - horarioEntradaMinutos;
+                
+                console.log(`Diferencia real: ${minutosReal} minutos`);
+                
+                // Si la diferencia es mayor que la tolerancia -> TARDANZA
+                if (minutosReal > toleranciaEntrada) {
+                    minutosTardanza = minutosReal;
+                    esTardanza = 1;
+                    console.log(`✅ RESULTADO: TARDA - ${minutosTardanza} minutos de tardanza`);
+                    console.log(`   (Excede la tolerancia de ${toleranciaEntrada} minutos)`);
+                } 
+                // Si la diferencia es positiva pero menor o igual a la tolerancia -> PUNTUAL
+                else if (minutosReal > 0 && minutosReal <= toleranciaEntrada) {
+                    minutosTardanza = 0;
+                    esTardanza = 0;
+                    console.log(`✅ RESULTADO: PUNTUAL - Dentro de tolerancia`);
+                    console.log(`   (Llegó ${minutosReal} minutos tarde, pero dentro de los ${toleranciaEntrada} minutos de tolerancia)`);
+                }
+                // Si llegó antes o justo a tiempo -> PUNTUAL
+                else {
+                    minutosTardanza = 0;
+                    esTardanza = 0;
+                    console.log(`✅ RESULTADO: PUNTUAL - Llegó a tiempo o antes`);
+                }
+            }
+            
+            // ==================== ACTUALIZAR REGISTRO ====================
+            const updateQuery = `
+                UPDATE asistencia 
+                SET HoraEntrada = ?,
+                    HoraSalidaAlmuerzo = ?,
+                    HoraRegresoAlmuerzo = ?,
+                    HoraSalida = ?,
+                    HorasTrabajadas = ?,
+                    Estado = ?,
+                    EsTardanza = ?,
+                    MinutosTardanza = ?,
+                    HorasExtras = ?,
+                    Observaciones = ?,
+                    EsRegistroManual = 1,
+                    updated_at = NOW()
+                WHERE AsistenciaID = ?
+            `;
+            
+            pool.query(updateQuery, [
+                horaEntrada || null,
+                horaSalidaAlmuerzo || null,
+                horaRegresoAlmuerzo || null,
+                horaSalida || null,
+                horasTrabajadas || 0,
+                estado,
+                esTardanza,
+                minutosTardanza,
+                horasExtras,
+                observaciones || null,
+                id
+            ], (err3, result) => {
+                if (err3) {
+                    console.error('Error:', err3);
+                    return res.status(500).json({ success: false, message: 'Error al actualizar registro' });
+                }
+                
+                res.json({
+                    success: true,
+                    message: 'Registro actualizado correctamente',
+                    data: {
+                        esTardanza: esTardanza === 1,
+                        minutosTardanza: minutosTardanza,
+                        horasExtras: horasExtras,
+                        horasTrabajadas: horasTrabajadas,
+                        estado: estado,
+                        toleranciaUsada: toleranciaEntrada
+                    }
+                });
+            });
+        });
+    });
+});
+
+
 
 // Endpoint para registro manual de asistencia
+// Registrar asistencia manual
+// Registrar asistencia manual
+// Registrar asistencia manual
 app.post('/api/asistencia/registro-manual', (req, res) => {
-    const { 
-        empId, 
-        fecha, 
-        horaEntrada, 
-        horaSalidaAlmuerzo, 
-        horaRegresoAlmuerzo, 
-        horaSalida, 
+    const {
+        empId,
+        fecha,
+        horaEntrada,
+        horaSalidaAlmuerzo,
+        horaRegresoAlmuerzo,
+        horaSalida,
         observaciones,
-        metodoValidacion 
+        metodoValidacion
     } = req.body;
 
-    // Validar campos requeridos
     if (!empId || !fecha || !horaEntrada) {
         return res.status(400).json({ 
-            message: 'Los campos empId, fecha y horaEntrada son obligatorios' 
+            success: false, 
+            message: 'Faltan campos requeridos' 
         });
     }
 
-    // Query para insertar o actualizar el registro de asistencia
-    const query = `
-        INSERT INTO asistencia (
-            EmpId, 
-            Fecha, 
-            HoraEntrada, 
-            HoraSalidaAlmuerzo, 
-            HoraRegresoAlmuerzo, 
-            HoraSalida, 
-            Observaciones,
-            MetodoValidacion,
-            EsRegistroManual,
-            FechaRegistro
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, NOW())
-        ON DUPLICATE KEY UPDATE
-            HoraEntrada = IFNULL(VALUES(HoraEntrada), HoraEntrada),
-            HoraSalidaAlmuerzo = IFNULL(VALUES(HoraSalidaAlmuerzo), HoraSalidaAlmuerzo),
-            HoraRegresoAlmuerzo = IFNULL(VALUES(HoraRegresoAlmuerzo), HoraRegresoAlmuerzo),
-            HoraSalida = IFNULL(VALUES(HoraSalida), HoraSalida),
-            Observaciones = VALUES(Observaciones),
-            MetodoValidacion = VALUES(MetodoValidacion),
-            EsRegistroManual = 1,
-            FechaActualizacion = NOW()
+    // Obtener horario semanal del empleado
+    const getHorarioSemanalQuery = `
+        SELECT 
+            eh.HorarioId,
+            eh.dias_trabajo,
+            h.Codigo AS horario_codigo,
+            h.Nombre AS horario_nombre,
+            h.HoraEntrada,
+            h.HoraSalida,
+            h.HoraAlmuerzoInicio,
+            h.HoraAlmuerzoFin,
+            h.ToleranciaEntrada,
+            h.ToleranciaSalida,
+            h.HorasLaborales,
+            h.EsTurnoNoche
+        FROM empleado_horario eh
+        JOIN horarios h ON eh.HorarioId = h.HorarioId
+        WHERE eh.EmpId = ? 
+            AND eh.semana_inicio <= ? 
+            AND eh.semana_fin >= ?
+            AND eh.activo = 1
+        LIMIT 1
     `;
 
-    pool.query(
-        query, 
-        [
-            empId, 
-            fecha, 
-            horaEntrada, 
-            horaSalidaAlmuerzo || null, 
-            horaRegresoAlmuerzo || null, 
-            horaSalida || null, 
-            observaciones || null,
-            metodoValidacion || 'manual'
-        ], 
-        (err, result) => {
-            if (err) {
-                console.error('❌ Error al registrar asistencia:', err);
-                return res.status(500).json({ 
-                    message: 'Error al registrar asistencia',
-                    error: err.message 
-                });
-            }
-            
-            res.json({ 
-                message: 'Asistencia registrada correctamente',
-                id: result.insertId 
+    pool.query(getHorarioSemanalQuery, [empId, fecha, fecha], (err, horarioResult) => {
+        if (err) {
+            console.error('Error obteniendo horario:', err);
+            return res.status(500).json({ success: false, message: 'Error al obtener horario' });
+        }
+
+        if (horarioResult.length === 0) {
+            return res.status(400).json({ 
+                success: false, 
+                message: '❌ El empleado no tiene horario asignado para esta fecha' 
             });
         }
-    );
+
+        const horario = horarioResult[0];
+        
+        // IMPORTANTE: Obtener la tolerancia de entrada de la tabla horario
+        const toleranciaEntrada = horario.ToleranciaEntrada || 0; // SI NO TIENE, ES 0
+        const toleranciaSalida = horario.ToleranciaSalida || 0;
+
+        console.log('=== DATOS DEL HORARIO ===');
+        console.log(`Horario ID: ${horario.HorarioId}`);
+        console.log(`Horario nombre: ${horario.horario_nombre}`);
+        console.log(`Hora entrada esperada: ${horario.HoraEntrada}`);
+        console.log(`Tolerancia entrada: ${toleranciaEntrada} minutos`);
+        console.log(`Hora salida esperada: ${horario.HoraSalida}`);
+        console.log(`Tolerancia salida: ${toleranciaSalida} minutos`);
+
+        // Validar día laborable
+        const fechaObj = new Date(fecha);
+        let diaSemana = fechaObj.getDay();
+        diaSemana = diaSemana === 0 ? 7 : diaSemana;
+        const diasLaborables = horario.dias_trabajo.split(',').map(Number);
+        
+        if (!diasLaborables.includes(diaSemana)) {
+            const diasNombres = { 1: 'Lunes', 2: 'Martes', 3: 'Miércoles', 4: 'Jueves', 5: 'Viernes', 6: 'Sábado', 7: 'Domingo' };
+            return res.status(400).json({ 
+                success: false, 
+                message: `❌ El empleado no trabaja los ${diasNombres[diaSemana]}` 
+            });
+        }
+
+        // Función para convertir hora a minutos
+        const horaToMinutos = (horaStr) => {
+            if (!horaStr) return null;
+            const [horas, minutos] = horaStr.split(':').map(Number);
+            return (horas * 60) + minutos;
+        };
+
+        // ==================== CÁLCULO DE TARDANZA (USANDO TOLERANCIA DEL HORARIO) ====================
+        let esTardanza = 0;
+        let minutosTardanza = 0;
+
+        const entradaMinutos = horaToMinutos(horaEntrada);
+        const horarioEntradaMinutos = horaToMinutos(horario.HoraEntrada);
+
+        console.log('\n=== CÁLCULO DE TARDANZA ===');
+        console.log(`Hora entrada registrada: ${horaEntrada} (${entradaMinutos} min desde medianoche)`);
+        console.log(`Horario entrada esperado: ${horario.HoraEntrada} (${horarioEntradaMinutos} min desde medianoche)`);
+        console.log(`Tolerancia entrada (de la tabla horario): ${toleranciaEntrada} minutos`);
+
+        if (entradaMinutos !== null && horarioEntradaMinutos !== null) {
+            // Calcular minutos de diferencia REALES
+            const minutosReal = entradaMinutos - horarioEntradaMinutos;
+            
+            console.log(`Diferencia real: ${minutosReal} minutos`);
+            
+            // Si la diferencia es mayor que la tolerancia -> TARDANZA
+            if (minutosReal > toleranciaEntrada) {
+                minutosTardanza = minutosReal;
+                esTardanza = 1;
+                console.log(`✅ RESULTADO: TARDA - ${minutosTardanza} minutos de tardanza`);
+                console.log(`   (Excede la tolerancia de ${toleranciaEntrada} minutos)`);
+            } 
+            // Si la diferencia es positiva pero menor o igual a la tolerancia -> PUNTUAL (dentro de tolerancia)
+            else if (minutosReal > 0 && minutosReal <= toleranciaEntrada) {
+                minutosTardanza = 0;
+                esTardanza = 0;
+                console.log(`✅ RESULTADO: PUNTUAL - Dentro de tolerancia`);
+                console.log(`   (Llegó ${minutosReal} minutos tarde, pero dentro de los ${toleranciaEntrada} minutos de tolerancia)`);
+            }
+            // Si llegó antes o justo a tiempo -> PUNTUAL
+            else {
+                minutosTardanza = 0;
+                esTardanza = 0;
+                console.log(`✅ RESULTADO: PUNTUAL - Llegó a tiempo o antes`);
+            }
+        }
+
+        // ==================== CÁLCULO DE HORAS TRABAJADAS ====================
+        let horasTrabajadas = 0;
+        let horasExtras = 0;
+        let estado = 'Incompleto';
+
+        if (entradaMinutos && horaSalida) {
+            const salidaMinutos = horaToMinutos(horaSalida);
+            
+            let totalMinutosTrabajados = salidaMinutos - entradaMinutos;
+            
+            if (horaSalidaAlmuerzo && horaRegresoAlmuerzo) {
+                const salidaAlmuerzoMinutos = horaToMinutos(horaSalidaAlmuerzo);
+                const regresoAlmuerzoMinutos = horaToMinutos(horaRegresoAlmuerzo);
+                const minutosAlmuerzo = regresoAlmuerzoMinutos - salidaAlmuerzoMinutos;
+                totalMinutosTrabajados -= minutosAlmuerzo;
+                console.log(`Tiempo almuerzo: ${minutosAlmuerzo} min`);
+            }
+            
+            horasTrabajadas = parseFloat((totalMinutosTrabajados / 60).toFixed(2));
+            
+            const horasLaborales = parseFloat(horario.HorasLaborales) || 8;
+            horasExtras = Math.max(0, horasTrabajadas - horasLaborales);
+            horasExtras = parseFloat(horasExtras.toFixed(2));
+            
+            estado = horasTrabajadas >= horasLaborales * 0.7 ? 'Completo' : 'Incompleto';
+            
+            console.log(`\n=== CÁLCULO DE HORAS ===`);
+            console.log(`Horas trabajadas: ${horasTrabajadas}`);
+            console.log(`Horas laborales esperadas: ${horasLaborales}`);
+            console.log(`Horas extras: ${horasExtras}`);
+            console.log(`Estado: ${estado}`);
+        }
+
+        // Verificar si ya existe registro
+        const checkQuery = `SELECT AsistenciaID FROM asistencia WHERE EmpId = ? AND Fecha = ?`;
+        
+        pool.query(checkQuery, [empId, fecha], (err2, existingResults) => {
+            if (err2) {
+                console.error('Error verificando registro:', err2);
+                return res.status(500).json({ success: false, message: 'Error al verificar registro' });
+            }
+
+            let query;
+            let params;
+            const isUpdate = existingResults.length > 0;
+
+            if (isUpdate) {
+                query = `
+                    UPDATE asistencia 
+                    SET HoraEntrada = ?,
+                        HoraSalidaAlmuerzo = ?,
+                        HoraRegresoAlmuerzo = ?,
+                        HoraSalida = ?,
+                        HorasTrabajadas = ?,
+                        Estado = ?,
+                        EsTardanza = ?,
+                        MinutosTardanza = ?,
+                        HorasExtras = ?,
+                        HorarioAplicadoId = ?,
+                        MetodoValidacion = ?,
+                        Observaciones = ?,
+                        EsRegistroManual = 1,
+                        updated_at = NOW()
+                    WHERE EmpId = ? AND Fecha = ?
+                `;
+                params = [
+                    horaEntrada || null,
+                    horaSalidaAlmuerzo || null,
+                    horaRegresoAlmuerzo || null,
+                    horaSalida || null,
+                    horasTrabajadas || 0,
+                    estado,
+                    esTardanza,
+                    minutosTardanza,
+                    horasExtras,
+                    horario.HorarioId,
+                    metodoValidacion || null,
+                    observaciones || null,
+                    empId,
+                    fecha
+                ];
+            } else {
+                query = `
+                    INSERT INTO asistencia (
+                        EmpId, Fecha, HoraEntrada, HoraSalidaAlmuerzo, HoraRegresoAlmuerzo,
+                        HoraSalida, HorasTrabajadas, Estado, EsTardanza, MinutosTardanza,
+                        HorasExtras, HorarioAplicadoId, MetodoValidacion, Observaciones, EsRegistroManual
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+                `;
+                params = [
+                    empId, fecha, horaEntrada,
+                    horaSalidaAlmuerzo || null, horaRegresoAlmuerzo || null,
+                    horaSalida || null, horasTrabajadas || 0,
+                    estado, esTardanza, minutosTardanza,
+                    horasExtras, horario.HorarioId,
+                    metodoValidacion || null, observaciones || null
+                ];
+            }
+
+            pool.query(query, params, (err3, result) => {
+                if (err3) {
+                    console.error('Error guardando asistencia:', err3);
+                    return res.status(500).json({ success: false, message: 'Error al guardar asistencia' });
+                }
+
+                res.json({
+                    success: true,
+                    message: isUpdate ? 'Asistencia actualizada correctamente' : 'Asistencia registrada correctamente',
+                    data: {
+                        esTardanza: esTardanza === 1,
+                        minutosTardanza: minutosTardanza,
+                        horasExtras: horasExtras,
+                        horasTrabajadas: horasTrabajadas,
+                        estado: estado,
+                        horarioAplicado: horario.horario_nombre,
+                        horarioEntrada: horario.HoraEntrada,
+                        horarioSalida: horario.HoraSalida,
+                        toleranciaEntrada: toleranciaEntrada
+                    }
+                });
+            });
+        });
+    });
 });
 
 
@@ -5497,7 +5951,7 @@ app.get('/api/categorias-gasto/:id', (req, res) => {
 });
 
 // Este es NUEVO - Para ver los gastos individuales al hacer clic en una tarjeta
-app.get('/api/gastos-por-categoria', (req, res) => {
+/* app.get('/api/gastos-por-categoria', (req, res) => {
     const { categoria_id, periodo_id, limite } = req.query;
     
     let query = `
@@ -5531,6 +5985,61 @@ app.get('/api/gastos-por-categoria', (req, res) => {
         }
         
         res.json({ success: true, data: results });
+    });
+}); */
+
+// Obtener gastos por categoría
+app.get('/api/gastos-por-categoria', (req, res) => {
+    const { categoria_id, periodo_id, limite } = req.query;
+    
+    let sqlQuery = `
+        SELECT 
+            g.gasto_id,
+            g.descripcion,
+            g.monto,
+            g.fecha_gasto,
+            g.observaciones,
+            cg.nombre AS categoria,
+            p.nombre AS periodo_nombre,
+            p.periodo
+        FROM gastos g
+        JOIN categoria_gasto cg ON g.categoria_id = cg.categoria_id
+        JOIN periodo p ON g.periodo_id = p.periodo_id
+        WHERE 1=1
+    `;
+    
+    const params = [];
+    
+    if (categoria_id) {
+        sqlQuery += ` AND g.categoria_id = ?`;
+        params.push(categoria_id);
+    }
+    
+    if (periodo_id) {
+        sqlQuery += ` AND g.periodo_id = ?`;
+        params.push(periodo_id);
+    }
+    
+    sqlQuery += ` ORDER BY g.fecha_gasto DESC`;
+    
+    if (limite) {
+        sqlQuery += ` LIMIT ?`;
+        params.push(parseInt(limite));
+    }
+    
+    pool.query(sqlQuery, params, (err, results) => {
+        if (err) {
+            console.error('Error:', err);
+            return res.status(500).json({ 
+                success: false, 
+                error: 'Error al obtener gastos' 
+            });
+        }
+        
+        res.json({
+            success: true,
+            data: results
+        });
     });
 });
 
@@ -5714,7 +6223,401 @@ app.get('/api/periodos-disponibles', (req, res) => {
 });
 
 
+/*2222222222222222222222222222222222222222222222222222222222 */
 
+// ============================================
+// ENDPOINTS PARA GESTIÓN DE HORARIOS SEMANALES
+// ============================================
+
+// Obtener todos los empleados con su horario actual
+// Obtener todos los empleados con su horario para una semana específica
+app.get('/api/empleados-con-horario', (req, res) => {
+    const { fecha_referencia } = req.query;
+    const fechaRef = fecha_referencia || new Date().toISOString().split('T')[0];
+    
+    const sqlQuery = `
+        SELECT 
+            e.EmpId,
+            e.Nombres,
+            e.Apellidos,
+            e.DocID,
+            e.Sueldo,
+            e.Cargo_EmpId,
+            c.Descripcion AS cargo_nombre,
+            eh.id AS horario_asignado_id,
+            eh.HorarioId,
+            eh.semana_inicio,
+            eh.semana_fin,
+            eh.dias_trabajo,
+            eh.horas_dia,
+            eh.activo AS horario_activo,
+            h.Codigo AS horario_codigo,
+            h.Nombre AS horario_nombre,
+            h.HoraEntrada,
+            h.HoraSalida,
+            h.HoraAlmuerzoInicio,
+            h.HoraAlmuerzoFin,
+            h.EsTurnoNoche
+        FROM empleado e
+        LEFT JOIN cargo_empleado c ON e.Cargo_EmpId = c.Cargo_EmpId
+        LEFT JOIN empleado_horario eh ON e.EmpId = eh.EmpId 
+            AND eh.semana_inicio = ?
+            AND eh.activo = 1
+        LEFT JOIN horarios h ON eh.HorarioId = h.HorarioId
+        WHERE (e.fecha_renuncia IS NULL OR e.fecha_renuncia > CURDATE())
+        ORDER BY e.Apellidos, e.Nombres
+    `;
+    
+    pool.query(sqlQuery, [fechaRef], (err, results) => {
+        if (err) {
+            console.error('Error en /api/empleados-con-horario:', err);
+            return res.status(500).json({ 
+                success: false, 
+                error: 'Error al obtener empleados',
+                details: err.message
+            });
+        }
+        
+        res.json({ success: true, data: results });
+    });
+});
+// Obtener historial de horarios de un empleado
+app.get('/api/empleado-horario/historial/:empId', (req, res) => {
+    const { empId } = req.params;
+    
+    const sqlQuery = `
+        SELECT 
+            eh.*,
+            h.Codigo AS horario_codigo,
+            h.Nombre AS horario_nombre,
+            h.HoraEntrada,
+            h.HoraSalida
+        FROM empleado_horario eh
+        JOIN horarios h ON eh.HorarioId = h.HorarioId
+        WHERE eh.EmpId = ?
+        ORDER BY eh.semana_inicio DESC
+    `;
+    
+    pool.query(sqlQuery, [empId], (err, results) => {
+        if (err) {
+            console.error('Error:', err);
+            return res.status(500).json({ success: false, error: 'Error al obtener historial' });
+        }
+        
+        res.json({ success: true, data: results });
+    });
+});
+
+// Obtener horario de un empleado para una semana específica
+app.get('/api/empleado-horario/semana', (req, res) => {
+    const { empId, fecha } = req.query;
+    
+    const sqlQuery = `
+        SELECT 
+            eh.*,
+            h.Codigo AS horario_codigo,
+            h.Nombre AS horario_nombre,
+            h.HoraEntrada,
+            h.HoraSalida,
+            h.HoraAlmuerzoInicio,
+            h.HoraAlmuerzoFin
+        FROM empleado_horario eh
+        JOIN horarios h ON eh.HorarioId = h.HorarioId
+        WHERE eh.EmpId = ? AND eh.semana_inicio <= ? AND eh.semana_fin >= ?
+        ORDER BY eh.fecha_asignacion DESC
+        LIMIT 1
+    `;
+    
+    pool.query(sqlQuery, [empId, fecha, fecha], (err, results) => {
+        if (err) {
+            console.error('Error:', err);
+            return res.status(500).json({ success: false, error: 'Error al obtener horario' });
+        }
+        
+        res.json({ success: true, data: results[0] || null });
+    });
+});
+
+// Asignar horario semanal a un empleado
+// Asignar horario semanal a un empleado (con validación de duplicado)
+app.post('/api/empleado-horario', (req, res) => {
+    const { 
+        EmpId, 
+        HorarioId, 
+        semana_inicio, 
+        semana_fin, 
+        dias_trabajo, 
+        horas_dia,
+        observaciones 
+    } = req.body;
+    
+    // Verificar si ya existe un horario para esta semana
+    const checkQuery = `SELECT id FROM empleado_horario WHERE EmpId = ? AND semana_inicio = ?`;
+    
+    pool.query(checkQuery, [EmpId, semana_inicio], (err, results) => {
+        if (err) {
+            console.error('Error:', err);
+            return res.status(500).json({ success: false, error: 'Error al verificar' });
+        }
+        
+        if (results.length > 0) {
+            return res.status(400).json({ 
+                success: false, 
+                error: `Ya existe un horario asignado para este empleado en la semana del ${semana_inicio}` 
+            });
+        }
+        
+        // Insertar el horario semanal
+        const insertQuery = `
+            INSERT INTO empleado_horario 
+            (EmpId, HorarioId, semana_inicio, semana_fin, dias_trabajo, horas_dia, observaciones, activo)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 1)
+        `;
+        const params = [EmpId, HorarioId, semana_inicio, semana_fin, dias_trabajo, horas_dia, observaciones];
+        
+        pool.query(insertQuery, params, (err2, result) => {
+            if (err2) {
+                console.error('Error:', err2);
+                return res.status(500).json({ success: false, error: 'Error al guardar horario' });
+            }
+            
+            // =====================================================
+            // GENERAR REGISTROS DE ASISTENCIA PARA TODOS LOS DÍAS DE LA SEMANA
+            // =====================================================
+            
+            // Convertir fechas
+            const inicio = new Date(semana_inicio);
+            const fin = new Date(semana_fin);
+            const diasLaborables = dias_trabajo.split(',').map(Number);
+            
+            // Array para almacenar las fechas a insertar
+            const fechasAsistencia = [];
+            
+            // Recorrer cada día de la semana
+            for (let d = new Date(inicio); d <= fin; d.setDate(d.getDate() + 1)) {
+                const fechaActual = new Date(d);
+                let diaSemana = fechaActual.getDay(); // 0 = Domingo, 1 = Lunes
+                diaSemana = diaSemana === 0 ? 7 : diaSemana;
+                
+                // Verificar si el día es laborable
+                if (diasLaborables.includes(diaSemana)) {
+                    const fechaStr = fechaActual.toISOString().split('T')[0];
+                    fechasAsistencia.push(fechaStr);
+                }
+            }
+            
+            if (fechasAsistencia.length > 0) {
+                // Construir consulta para insertar o actualizar asistencias
+                let asistenciaQuery = `
+                    INSERT INTO asistencia (EmpId, Fecha, Estado, HorarioAplicadoId, Observaciones)
+                    VALUES ?
+                    ON DUPLICATE KEY UPDATE
+                        HorarioAplicadoId = VALUES(HorarioAplicadoId),
+                        Observaciones = CONCAT(IFNULL(Observaciones, ''), ' | ', VALUES(Observaciones))
+                `;
+                
+                const asistenciaValues = fechasAsistencia.map(fecha => [
+                    EmpId, 
+                    fecha, 
+                    'Ausente', 
+                    HorarioId, 
+                    `Horario asignado automáticamente para semana del ${semana_inicio}`
+                ]);
+                
+                pool.query(asistenciaQuery, [asistenciaValues], (err3, result3) => {
+                    if (err3) {
+                        console.error('Error generando asistencias:', err3);
+                        // No fallamos la operación principal, solo registramos el error
+                        console.error('No se pudieron generar algunos registros de asistencia');
+                    }
+                    
+                    res.json({ 
+                        success: true, 
+                        message: `Horario asignado correctamente. Se generaron ${asistenciaValues.length} registros de asistencia para la semana.`,
+                        asistencias_generadas: asistenciaValues.length
+                    });
+                });
+            } else {
+                res.json({ 
+                    success: true, 
+                    message: 'Horario asignado correctamente. No se generaron asistencias (sin días laborables).'
+                });
+            }
+        });
+    });
+});
+
+// Actualizar horario existente (con regeneración de asistencias)
+app.put('/api/empleado-horario/:id', (req, res) => {
+    const { id } = req.params;
+    const { HorarioId, semana_fin, dias_trabajo, horas_dia, observaciones } = req.body;
+    
+    // Primero obtener el horario actual para conocer la semana
+    const getHorarioQuery = `SELECT EmpId, semana_inicio, semana_fin FROM empleado_horario WHERE id = ?`;
+    
+    pool.query(getHorarioQuery, [id], (err, horarioActual) => {
+        if (err) {
+            console.error('Error:', err);
+            return res.status(500).json({ success: false, error: 'Error al obtener horario' });
+        }
+        
+        if (horarioActual.length === 0) {
+            return res.status(404).json({ success: false, error: 'Horario no encontrado' });
+        }
+        
+        const empId = horarioActual[0].EmpId;
+        const semanaInicio = horarioActual[0].semana_inicio;
+        
+        // Actualizar el horario
+        const updateQuery = `
+            UPDATE empleado_horario 
+            SET HorarioId = ?,
+                semana_fin = ?,
+                dias_trabajo = ?,
+                horas_dia = ?,
+                observaciones = ?,
+                fecha_modificacion = NOW()
+            WHERE id = ?
+        `;
+        
+        pool.query(updateQuery, [HorarioId, semana_fin, dias_trabajo, horas_dia, observaciones, id], (err2, result) => {
+            if (err2) {
+                console.error('Error:', err2);
+                return res.status(500).json({ success: false, error: 'Error al actualizar horario' });
+            }
+            
+            // Regenerar asistencias para la semana
+            const inicio = new Date(semanaInicio);
+            const fin = new Date(semana_fin);
+            const diasLaborables = dias_trabajo.split(',').map(Number);
+            
+            const fechasAsistencia = [];
+            
+            for (let d = new Date(inicio); d <= fin; d.setDate(d.getDate() + 1)) {
+                const fechaActual = new Date(d);
+                let diaSemana = fechaActual.getDay();
+                diaSemana = diaSemana === 0 ? 7 : diaSemana;
+                
+                if (diasLaborables.includes(diaSemana)) {
+                    const fechaStr = fechaActual.toISOString().split('T')[0];
+                    fechasAsistencia.push(fechaStr);
+                }
+            }
+            
+            if (fechasAsistencia.length > 0) {
+                const asistenciaQuery = `
+                    INSERT INTO asistencia (EmpId, Fecha, Estado, HorarioAplicadoId, Observaciones)
+                    VALUES ?
+                    ON DUPLICATE KEY UPDATE
+                        HorarioAplicadoId = VALUES(HorarioAplicadoId),
+                        Observaciones = CONCAT(IFNULL(Observaciones, ''), ' | Actualizado: ', VALUES(Observaciones))
+                `;
+                
+                const asistenciaValues = fechasAsistencia.map(fecha => [
+                    empId, fecha, 'Ausente', HorarioId, 
+                    `Horario actualizado para semana del ${semanaInicio}`
+                ]);
+                
+                pool.query(asistenciaQuery, [asistenciaValues], (err3, result3) => {
+                    if (err3) {
+                        console.error('Error actualizando asistencias:', err3);
+                    }
+                    
+                    res.json({ 
+                        success: true, 
+                        message: `Horario actualizado correctamente. Se actualizaron ${asistenciaValues.length} registros de asistencia.`
+                    });
+                });
+            } else {
+                res.json({ success: true, message: 'Horario actualizado correctamente.' });
+            }
+        });
+    });
+});
+
+app.put('/api/empleado-horario/:id', (req, res) => {
+    const { id } = req.params;
+    const { HorarioId, semana_fin, dias_trabajo, horas_dia, observaciones } = req.body;
+    
+    const sqlQuery = `
+        UPDATE empleado_horario 
+        SET HorarioId = ?,
+            semana_fin = ?,
+            dias_trabajo = ?,
+            horas_dia = ?,
+            observaciones = ?,
+            fecha_modificacion = NOW()
+        WHERE id = ?
+    `;
+    
+    pool.query(sqlQuery, [HorarioId, semana_fin, dias_trabajo, horas_dia, observaciones, id], (err, result) => {
+        if (err) {
+            console.error('Error:', err);
+            return res.status(500).json({ success: false, error: 'Error al actualizar horario' });
+        }
+        
+        res.json({ success: true, message: 'Horario actualizado correctamente' });
+    });
+});
+
+
+// Desactivar horario (eliminación lógica)
+app.delete('/api/empleado-horario/:id', (req, res) => {
+    const { id } = req.params;
+    
+    const sqlQuery = `UPDATE empleado_horario SET activo = 0 WHERE id = ?`;
+    
+    pool.query(sqlQuery, [id], (err, result) => {
+        if (err) {
+            console.error('Error:', err);
+            return res.status(500).json({ success: false, error: 'Error al desactivar horario' });
+        }
+        
+        res.json({ success: true, message: 'Horario desactivado correctamente' });
+    });
+});
+
+// Obtener semanas disponibles (para el selector)
+app.get('/api/semanas-disponibles', (req, res) => {
+    const semanas = [];
+    const hoy = new Date();
+    
+    // Generar últimas 12 semanas y próximas 4 semanas
+    for (let i = -12; i <= 4; i++) {
+        const fecha = new Date(hoy);
+        fecha.setDate(hoy.getDate() + (i * 7));
+        
+        // Obtener inicio de semana (Lunes)
+        const diaSemana = fecha.getDay();
+        const diff = diaSemana === 0 ? 6 : diaSemana - 1;
+        const lunes = new Date(fecha);
+        lunes.setDate(fecha.getDate() - diff);
+        lunes.setHours(0, 0, 0, 0);
+        
+        const domingo = new Date(lunes);
+        domingo.setDate(lunes.getDate() + 6);
+        
+        const formatoFecha = (date) => date.toISOString().split('T')[0];
+        
+        semanas.push({
+            inicio: formatoFecha(lunes),
+            fin: formatoFecha(domingo),
+            label: `Semana del ${lunes.getDate()}/${lunes.getMonth() + 1} al ${domingo.getDate()}/${domingo.getMonth() + 1}`,
+            anio: lunes.getFullYear(),
+            numero: getWeekNumber(lunes)
+        });
+    }
+    
+    res.json({ success: true, data: semanas });
+});
+
+function getWeekNumber(date) {
+    const firstJan = new Date(date.getFullYear(), 0, 1);
+    const days = Math.floor((date - firstJan) / (24 * 60 * 60 * 1000));
+    return Math.ceil((days + firstJan.getDay() + 1) / 7);
+}
+
+/*2222222222222222222222222222222222222222222222222222222222 */
 
 // ============================================================
 // 📘 CRUD DE GASTOS
@@ -6861,49 +7764,143 @@ app.post('/api/ubicacion/verificar', validarUbicacionMarcacion, (req, res) => {
 });
 
 // Reporte de asistencia
-app.get('/api/reportes/asistencia', async (req, res) => {
-  try {
-    const { fecha_inicio, fecha_fin, empId } = req.query;
+// Endpoint para obtener reporte de asistencia con HorasExtras
+// Endpoint para obtener reporte de asistencia
+app.get('/api/reportes/asistencia', (req, res) => {
+    const { fecha_inicio, fecha_fin, empId, horario_id } = req.query;
 
     let query = `
-            SELECT 
-                e.EmpId,
-                e.DocID as Codigo,
-                e.Nombres,
-                e.Apellidos,
-                e.Cargo_EmpId,
-                a.Fecha,
-                a.HoraEntrada,
-                a.HoraSalidaAlmuerzo,
-                a.HoraRegresoAlmuerzo,
-                a.HoraSalida,
-                a.HorasTrabajadas,
-                a.Estado,
-                a.MetodoValidacion
-            FROM asistencia a
-            INNER JOIN empleado e ON a.EmpId = e.EmpId
-            WHERE a.Fecha BETWEEN ? AND ?
-        `;
+        SELECT 
+            a.AsistenciaID,
+            a.EmpId,
+            a.Fecha,
+            a.HoraEntrada,
+            a.HoraSalidaAlmuerzo,
+            a.HoraRegresoAlmuerzo,
+            a.HoraSalida,
+            a.HorasTrabajadas,
+            a.Estado,
+            a.EsTardanza,
+            a.MinutosTardanza,
+            a.HorasExtras,
+            a.MetodoValidacion,
+            a.Observaciones,
+            e.Nombres,
+            e.Apellidos,
+            e.DocID,
+            h.Nombre AS HorarioNombre,
+            h.HorasLaborales,
+            CONCAT(LEFT(eh.semana_inicio, 10), ' al ', LEFT(eh.semana_fin, 10)) AS semana_aplicada
+        FROM asistencia a
+        JOIN empleado e ON a.EmpId = e.EmpId
+        LEFT JOIN empleado_horario eh ON e.EmpId = eh.EmpId 
+            AND a.Fecha >= eh.semana_inicio 
+            AND a.Fecha <= eh.semana_fin 
+            AND eh.activo = 1
+        LEFT JOIN horarios h ON eh.HorarioId = h.HorarioId
+        WHERE a.Fecha BETWEEN ? AND ?
+    `;
 
     const params = [fecha_inicio, fecha_fin];
 
     if (empId) {
-      query += ' AND e.EmpId = ?';
-      params.push(empId);
+        query += ` AND a.EmpId = ?`;
+        params.push(empId);
     }
 
-    query += ' ORDER BY a.Fecha DESC, e.Nombres';
+    if (horario_id) {
+        query += ` AND eh.HorarioId = ?`;
+        params.push(horario_id);
+    }
 
-    const [resultados] = await promisePool.query(query, params);
-    res.json(resultados);
+    query += ` ORDER BY a.Fecha DESC, a.EmpId`;
 
-  } catch (error) {
-    console.error("❌ Error generando reporte:", error);
-    res.status(500).json({
-      error: 'Error al generar reporte',
-      message: error.message
+    pool.query(query, params, (err, results) => {
+        if (err) {
+            console.error('Error en reporte:', err);
+            return res.status(500).json({ 
+                success: false, 
+                message: 'Error al generar reporte',
+                error: err.message 
+            });
+        }
+
+        // Asegurar que los valores sean números
+        const processedResults = results.map(row => ({
+            ...row,
+            HorasTrabajadas: parseFloat(row.HorasTrabajadas) || 0,
+            HorasExtras: parseFloat(row.HorasExtras) || 0,
+            MinutosTardanza: parseInt(row.MinutosTardanza) || 0
+        }));
+
+        res.json(processedResults);
     });
-  }
+});
+
+app.get('/api/empleado-horario/por-fecha', (req, res) => {
+    const { empId, fecha } = req.query;
+
+    if (!empId || !fecha) {
+        return res.status(400).json({ 
+            success: false, 
+            message: 'Se requiere empId y fecha' 
+        });
+    }
+
+    const query = `
+        SELECT 
+            eh.*,
+            h.Codigo AS horario_codigo,
+            h.Nombre AS horario_nombre,
+            h.HoraEntrada,
+            h.HoraSalida,
+            h.HoraAlmuerzoInicio,
+            h.HoraAlmuerzoFin,
+            h.ToleranciaEntrada,
+            h.ToleranciaSalida,
+            h.HorasLaborales,
+            h.EsTurnoNoche,
+            h.TieneAlmuerzo
+        FROM empleado_horario eh
+        JOIN horarios h ON eh.HorarioId = h.HorarioId
+        WHERE eh.EmpId = ? 
+            AND eh.semana_inicio <= ? 
+            AND eh.semana_fin >= ?
+            AND eh.activo = 1
+        LIMIT 1
+    `;
+
+    pool.query(query, [empId, fecha, fecha], (err, results) => {
+        if (err) {
+            console.error('Error:', err);
+            return res.status(500).json({ 
+                success: false, 
+                message: 'Error al obtener horario' 
+            });
+        }
+
+        if (results.length === 0) {
+            return res.status(404).json({ 
+                success: false, 
+                message: 'No se encontró horario semanal para esta fecha' 
+            });
+        }
+
+        // Validar si el día es laborable
+        const fechaObj = new Date(fecha);
+        let diaSemana = fechaObj.getDay();
+        diaSemana = diaSemana === 0 ? 7 : diaSemana;
+        
+        const diasLaborables = results[0].dias_trabajo.split(',').map(Number);
+        const esDiaLaborable = diasLaborables.includes(diaSemana);
+
+        res.json({
+            success: true,
+            data: results[0],
+            es_dia_laborable: esDiaLaborable,
+            dias_laborables: diasLaborables
+        });
+    });
 });
 
 
