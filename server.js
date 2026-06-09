@@ -2264,7 +2264,7 @@ app.get('/api/listaempleadoactivo', (req, res) => {
         FROM empleado e
         JOIN tipo_empleado t ON e.Tipo_EmpId = t.Tipo_EmpId
         JOIN cargo_empleado c ON e.Cargo_EmpId = c.Cargo_EmpId
-        WHERE FECHA_RENUNCIA IS NULL and c.Cargo_EmpId not in ('GG','AD')
+        WHERE FECHA_RENUNCIA IS NULL and c.Cargo_EmpId not in ('GG')
         ORDER BY e.fecha_ingreso;
   `;
 
