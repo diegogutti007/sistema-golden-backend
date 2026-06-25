@@ -251,6 +251,229 @@ app.get('/api/test', (req, res) => {
   });
 });
 
+// ============================================
+// ENDPOINTS PARA DASHBOARD DE VENTAS
+// ============================================
+
+// Obtener datos para dashboard de ventas
+// Obtener datos para dashboard de ventas
+app.get('/api/dashboard-ventas', (req, res) => {
+    const { periodo, year, mes, semana } = req.query;
+    
+    let fechaInicio, fechaFin;
+    const yearNum = parseInt(year) || new Date().getFullYear();
+    const mesNum = parseInt(mes) || new Date().getMonth() + 1;
+    const semanaNum = parseInt(semana) || 1;
+    
+    // Calcular rango de fechas según el periodo
+    if (periodo === 'anual') {
+        fechaInicio = `${yearNum}-01-01`;
+        fechaFin = `${yearNum}-12-31`;
+    } else if (periodo === 'mensual') {
+        const ultimoDia = new Date(yearNum, mesNum, 0).getDate();
+        fechaInicio = `${yearNum}-${String(mesNum).padStart(2, '0')}-01`;
+        fechaFin = `${yearNum}-${String(mesNum).padStart(2, '0')}-${String(ultimoDia).padStart(2, '0')}`;
+    } else if (periodo === 'semanal') {
+        const primerDia = new Date(yearNum, mesNum - 1, 1);
+        const diaInicio = (semanaNum - 1) * 7 + 1;
+        const diaFin = Math.min(diaInicio + 6, new Date(yearNum, mesNum, 0).getDate());
+        fechaInicio = `${yearNum}-${String(mesNum).padStart(2, '0')}-${String(diaInicio).padStart(2, '0')}`;
+        fechaFin = `${yearNum}-${String(mesNum).padStart(2, '0')}-${String(diaFin).padStart(2, '0')}`;
+    } else {
+        const hoy = new Date();
+        const ultimoDia = new Date(hoy.getFullYear(), hoy.getMonth() + 1, 0).getDate();
+        fechaInicio = `${hoy.getFullYear()}-${String(hoy.getMonth() + 1).padStart(2, '0')}-01`;
+        fechaFin = `${hoy.getFullYear()}-${String(hoy.getMonth() + 1).padStart(2, '0')}-${String(ultimoDia).padStart(2, '0')}`;
+    }
+    
+    // ============================================
+    // QUERY CORREGIDA - Agrupar correctamente
+    // ============================================
+    const ventasQuery = `
+       SELECT 
+            DATE_FORMAT(FechaVenta, '%Y-%m-%d') AS fecha,
+            DATE_FORMAT(FechaVenta, '%d') AS dia,
+            DATE_FORMAT(FechaVenta, '%m') AS mes,
+            DATE_FORMAT(FechaVenta, '%Y') AS year,
+            SUM(Total) AS total,
+            COUNT(*) AS cantidad
+        FROM venta
+        WHERE FechaVenta BETWEEN ? AND ?
+        GROUP BY fecha, dia, mes, year
+        ORDER BY fecha ASC
+    `;
+    
+    pool.query(ventasQuery, [fechaInicio, fechaFin], (err, ventas) => {
+        if (err) {
+            console.error('Error:', err);
+            return res.status(500).json({ success: false, error: err.message });
+        }
+        
+        // Procesar datos para el gráfico
+        let datosGrafico = [];
+        let totalVentas = 0;
+        let totalVentasCount = 0;
+        
+        if (periodo === 'anual') {
+            // Agrupar por mes
+            const meses = Array.from({ length: 12 }, (_, i) => ({
+                mes: i + 1,
+                total: 0,
+                cantidad: 0
+            }));
+            
+            ventas.forEach(v => {
+                const mesIdx = parseInt(v.mes) - 1;
+                meses[mesIdx].total += parseFloat(v.total) || 0;
+                meses[mesIdx].cantidad += parseInt(v.cantidad) || 0;
+            });
+            
+            const nombresMeses = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
+            datosGrafico = meses.map((m, i) => ({
+                label: nombresMeses[i],
+                total: m.total,
+                cantidad: m.cantidad
+            }));
+            
+            totalVentas = datosGrafico.reduce((sum, d) => sum + d.total, 0);
+            totalVentasCount = datosGrafico.reduce((sum, d) => sum + d.cantidad, 0);
+            
+        } else if (periodo === 'mensual') {
+            // Agrupar por día
+            const ultimoDia = new Date(yearNum, mesNum, 0).getDate();
+            const dias = Array.from({ length: ultimoDia }, (_, i) => ({
+                dia: i + 1,
+                total: 0,
+                cantidad: 0
+            }));
+            
+            ventas.forEach(v => {
+                const diaIdx = parseInt(v.dia) - 1;
+                if (dias[diaIdx]) {
+                    dias[diaIdx].total += parseFloat(v.total) || 0;
+                    dias[diaIdx].cantidad += parseInt(v.cantidad) || 0;
+                }
+            });
+            
+            datosGrafico = dias.map(d => ({
+                label: String(d.dia),
+                total: d.total,
+                cantidad: d.cantidad
+            }));
+            
+            totalVentas = datosGrafico.reduce((sum, d) => sum + d.total, 0);
+            totalVentasCount = datosGrafico.reduce((sum, d) => sum + d.cantidad, 0);
+            
+        } else if (periodo === 'semanal') {
+            // Agrupar por día de la semana
+            const diasSemana = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'];
+            const dias = diasSemana.map((d, i) => ({
+                dia: i + 1,
+                label: d,
+                total: 0,
+                cantidad: 0
+            }));
+            
+            ventas.forEach(v => {
+                const fecha = new Date(v.fecha);
+                const diaSemana = fecha.getDay();
+                const idx = diaSemana === 0 ? 6 : diaSemana - 1;
+                if (dias[idx]) {
+                    dias[idx].total += parseFloat(v.total) || 0;
+                    dias[idx].cantidad += parseInt(v.cantidad) || 0;
+                }
+            });
+            
+            datosGrafico = dias.map(d => ({
+                label: d.label,
+                total: d.total,
+                cantidad: d.cantidad
+            }));
+            
+            totalVentas = datosGrafico.reduce((sum, d) => sum + d.total, 0);
+            totalVentasCount = datosGrafico.reduce((sum, d) => sum + d.cantidad, 0);
+        }
+        
+        // Calcular estadísticas
+        const totales = datosGrafico.map(d => d.total);
+        const maxVenta = Math.max(...totales, 0);
+        const minVenta = Math.min(...totales.filter(t => t > 0), 0);
+        const promedio = totales.length > 0 ? totalVentas / totales.length : 0;
+        
+        // Calcular crecimiento
+        let crecimiento = 0;
+        if (totales.length > 1 && totales[0] > 0) {
+            crecimiento = ((totales[totales.length - 1] - totales[0]) / totales[0]) * 100;
+        }
+        
+        // Obtener top productos
+        const topProductosQuery = `
+          SELECT 
+              p.Nombre AS nombre,
+              SUM(vd.Cantidad) AS cantidad,
+              SUM(vd.Cantidad * vd.PrecioUnitario) AS total
+          FROM venta_detalle vd
+          JOIN articulo p ON vd.ArticuloId = p.ArticuloId
+          JOIN venta v ON vd.VentaId = v.VentaId
+          WHERE v.FechaVenta BETWEEN ? AND ?
+          GROUP BY p.ArticuloId, p.Nombre
+          ORDER BY total DESC
+          LIMIT 5
+        `;
+        
+        pool.query(topProductosQuery, [fechaInicio, fechaFin], (err2, topProductos) => {
+            if (err2) {
+                console.error('Error en top productos:', err2);
+            }
+            
+            // Resumen mensual (últimos 6 meses)
+            const resumenMensualQuery = `
+              SELECT 
+                  DATE_FORMAT(FechaVenta, '%Y-%m') AS mes,
+                  DATE_FORMAT(FechaVenta, '%b') AS mes_nombre,
+                  SUM(Total) AS total,
+                  COUNT(*) AS cantidad
+              FROM venta
+              WHERE FechaVenta BETWEEN DATE_SUB(?, INTERVAL 5 MONTH) AND ?
+              GROUP BY DATE_FORMAT(FechaVenta, '%Y-%m'), DATE_FORMAT(FechaVenta, '%b')
+              ORDER BY mes DESC
+              LIMIT 6
+            `;
+            
+            pool.query(resumenMensualQuery, [fechaFin, fechaFin], (err3, resumenMensual) => {
+                if (err3) {
+                    console.error('Error en resumen mensual:', err3);
+                }
+                
+                res.json({
+                    success: true,
+                    data: {
+                        ventas: datosGrafico,
+                        estadisticas: {
+                            totalVentas: totalVentas,
+                            promedioVentas: promedio,
+                            ventaMaxima: maxVenta,
+                            ventaMinima: minVenta,
+                            crecimiento: crecimiento,
+                            totalTransacciones: totalVentasCount
+                        },
+                        top_productos: topProductos || [],
+                        resumen_mensual: (resumenMensual || []).map(r => ({
+                            mes: r.mes_nombre || r.mes,
+                            total: r.total || 0,
+                            cantidad: r.cantidad || 0
+                        }))
+                    }
+                });
+            });
+        });
+    });
+});
+
+
+
+
+
 
 const promisePool = pool.promise();
 
@@ -901,6 +1124,90 @@ app.get('/api/horarios/excepciones', async (req, res) => {
         res.status(500).json({ error: error.message });
     }
 });
+
+
+
+
+
+// backend/routes/qr.js
+
+// Generar token único del local (solo admin)
+app.post('/api/qr/local/generar', async (req, res) => {
+  const token = crypto.randomBytes(32).toString('hex');
+  const expiresAt = new Date();
+  expiresAt.setFullYear(expiresAt.getFullYear() + 1); // Válido por 1 año
+  
+  await db.query(
+    'INSERT INTO qr_local_tokens (token, expires_at) VALUES (?, ?)',
+    [token, expiresAt]
+  );
+  
+  res.json({ success: true, token });
+});
+
+// Verificar token del local
+app.get('/api/qr/local/verificar/:token', async (req, res) => {
+  const { token } = req.params;
+  const [qrData] = await db.query(
+    'SELECT * FROM qr_local_tokens WHERE token = ? AND expires_at > NOW()',
+    [token]
+  );
+  
+  res.json({ valido: qrData && qrData.length > 0 });
+});
+
+// Registrar marcación de empleado
+app.post('/api/marcacion/empleado', async (req, res) => {
+  const { empId, tipo, tokenLocal } = req.body;
+  
+  // Verificar token del local
+  const [qrLocal] = await db.query(
+    'SELECT * FROM qr_local_tokens WHERE token = ? AND expires_at > NOW()',
+    [tokenLocal]
+  );
+  
+  if (!qrLocal || qrLocal.length === 0) {
+    return res.status(400).json({ error: 'QR del local inválido' });
+  }
+  
+  // Registrar marcación
+  const ahora = new Date();
+  const hoy = ahora.toISOString().split('T')[0];
+  const horaActual = ahora.toTimeString().split(' ')[0].substring(0, 5);
+  
+  // Buscar registro de asistencia del día
+  let [registro] = await db.query(
+    'SELECT * FROM asistencias WHERE EmpId = ? AND Fecha = ?',
+    [empId, hoy]
+  );
+  
+  if (registro.length === 0) {
+    await db.query(
+      `INSERT INTO asistencias (EmpId, Fecha, HoraEntrada, HoraSalidaAlmuerzo, 
+        HoraRegresoAlmuerzo, HoraSalida, Estado) 
+       VALUES (?, ?, ?, ?, ?, ?, 'Incompleto')`,
+      [empId, hoy, 
+       tipo === 'entrada' ? horaActual : null,
+       tipo === 'salida_almuerzo' ? horaActual : null,
+       tipo === 'regreso_almuerzo' ? horaActual : null,
+       tipo === 'salida' ? horaActual : null]
+    );
+  } else {
+    const updateFields = {};
+    if (tipo === 'entrada') updateFields.HoraEntrada = horaActual;
+    if (tipo === 'salida_almuerzo') updateFields.HoraSalidaAlmuerzo = horaActual;
+    if (tipo === 'regreso_almuerzo') updateFields.HoraRegresoAlmuerzo = horaActual;
+    if (tipo === 'salida') updateFields.HoraSalida = horaActual;
+    
+    await db.query('UPDATE asistencias SET ? WHERE AsistenciaID = ?', [updateFields, registro[0].AsistenciaID]);
+  }
+  
+  res.json({ success: true, message: `${tipo} registrada a las ${horaActual}`, hora: horaActual });
+});
+
+
+
+
 
 // ============================================
 // 10. APROBAR/RECHAZAR EXCEPCIÓN DE HORARIO
@@ -7762,6 +8069,180 @@ app.post('/api/ubicacion/verificar', validarUbicacionMarcacion, (req, res) => {
     datos: req.ubicacionValida
   });
 });
+
+
+
+
+
+// ============================================
+// ENDPOINTS PARA PRE-NÓMINA / PLANILLA
+// ============================================
+
+// Calcular pre-nómina (antes de pagos)
+app.get('/api/pre-nomina-calculo', (req, res) => {
+    const { periodo_id, fecha_inicio, fecha_fin } = req.query;
+    
+    let fechaInicio, fechaFin;
+    
+    const calcular = (inicio, fin) => {
+        // Obtener empleados activos
+        const empleadosQuery = `
+            SELECT EmpId, Nombres, Apellidos, DocID, Sueldo 
+            FROM empleado 
+            WHERE fecha_renuncia IS NULL OR fecha_renuncia > CURDATE()
+        `;
+        
+        pool.query(empleadosQuery, (err, empleados) => {
+            if (err) return res.status(500).json({ success: false, error: err.message });
+            if (empleados.length === 0) {
+                return res.json({ success: true, data: { empleados: [], resumen: {} } });
+            }
+            
+            const empIds = empleados.map(e => e.EmpId);
+            const placeholders = empIds.map(() => '?').join(',');
+            
+            // Obtener asistencias
+            const asistenciasQuery = `
+                SELECT EmpId, Fecha, Estado, EsTardanza, MinutosTardanza, HoraEntrada, HoraSalida
+                FROM asistencia
+                WHERE EmpId IN (${placeholders}) AND Fecha BETWEEN ? AND ?
+            `;
+            
+            pool.query(asistenciasQuery, [...empIds, inicio, fin], (err2, asistencias) => {
+                if (err2) return res.status(500).json({ success: false, error: err2.message });
+                
+                // Obtener bonos y comisiones ya registrados
+                const pagosQuery = `
+                    SELECT EmpId, categoria_id, SUM(monto) as total
+                    FROM gastos
+                    WHERE EmpId IN (${placeholders}) AND categoria_id IN (11, 12)
+                    AND fecha_gasto BETWEEN ? AND ?
+                    GROUP BY EmpId, categoria_id
+                `;
+                
+                pool.query(pagosQuery, [...empIds, inicio, fin], (err3, pagos) => {
+                    if (err3) return res.status(500).json({ success: false, error: err3.message });
+                    
+                    const bonosPorEmpleado = {};
+                    const comisionesPorEmpleado = {};
+                    pagos.forEach(p => {
+                        if (p.categoria_id === 11) bonosPorEmpleado[p.EmpId] = (bonosPorEmpleado[p.EmpId] || 0) + p.total;
+                        if (p.categoria_id === 12) comisionesPorEmpleado[p.EmpId] = (comisionesPorEmpleado[p.EmpId] || 0) + p.total;
+                    });
+                    
+                    // Calcular días laborables (excluyendo domingos)
+                    const diasLaborables = [];
+                    const fechaInicioDate = new Date(inicio);
+                    const fechaFinDate = new Date(fin);
+                    for (let d = new Date(fechaInicioDate); d <= fechaFinDate; d.setDate(d.getDate() + 1)) {
+                        if (d.getDay() !== 0) diasLaborables.push(d.toISOString().split('T')[0]);
+                    }
+                    const totalDiasLaborables = diasLaborables.length;
+                    
+                    let totalPagarGeneral = 0;
+                    let totalSueldosBase = 0;
+                    let totalBonosComisiones = 0;
+                    let totalDescuentos = 0;
+                    let totalAusencias = 0;
+                    
+                    const empleadosProcesados = empleados.map(emp => {
+                        const asistenciasEmp = asistencias.filter(a => a.EmpId === emp.EmpId);
+                        const diasAusentes = asistenciasEmp.filter(a => a.Estado === 'Ausente').length;
+                        const valorPorDia = totalDiasLaborables > 0 ? (emp.Sueldo || 0) / totalDiasLaborables : 0;
+                        const descuento = diasAusentes * valorPorDia;
+                        const sueldoBase = emp.Sueldo || 0;
+                        const totalBonos = bonosPorEmpleado[emp.EmpId] || 0;
+                        const totalComisiones = comisionesPorEmpleado[emp.EmpId] || 0;
+                        const totalPagar = (sueldoBase - descuento) + totalBonos + totalComisiones;
+                        
+                        totalPagarGeneral += totalPagar;
+                        totalSueldosBase += sueldoBase;
+                        totalBonosComisiones += totalBonos + totalComisiones;
+                        totalDescuentos += descuento;
+                        totalAusencias += diasAusentes;
+                        
+                        return {
+                            EmpId: emp.EmpId,
+                            Nombres: emp.Nombres,
+                            Apellidos: emp.Apellidos,
+                            DocID: emp.DocID,
+                            sueldo_base: sueldoBase,
+                            dias_laborables: totalDiasLaborables,
+                            dias_trabajados: totalDiasLaborables - diasAusentes,
+                            dias_ausentes: diasAusentes,
+                            valor_dia: valorPorDia,
+                            descuento: descuento,
+                            total_bonos: totalBonos,
+                            total_comisiones: totalComisiones,
+                            total_pagar: totalPagar
+                        };
+                    });
+                    
+                    res.json({
+                        success: true,
+                        data: {
+                            empleados: empleadosProcesados,
+                            resumen: {
+                                total_pagar: totalPagarGeneral,
+                                total_sueldos_base: totalSueldosBase,
+                                total_bonos_comisiones: totalBonosComisiones,
+                                total_descuentos: totalDescuentos,
+                                total_ausencias: totalAusencias,
+                                total_empleados: empleados.length
+                            }
+                        }
+                    });
+                });
+            });
+        });
+    };
+    
+    if (periodo_id) {
+        const periodoQuery = `SELECT periodo FROM periodo WHERE periodo_id = ?`;
+        pool.query(periodoQuery, [periodo_id], (err, periodoResult) => {
+            if (err) return res.status(500).json({ success: false, error: err.message });
+            const periodo = periodoResult[0]?.periodo || '';
+            const anio = periodo.substring(0, 4);
+            const mes = periodo.substring(4, 6);
+            calcular(`${anio}-${mes}-01`, new Date(anio, mes, 0).toISOString().split('T')[0]);
+        });
+    } else if (fecha_inicio && fecha_fin) {
+        calcular(fecha_inicio, fecha_fin);
+    } else {
+        res.status(400).json({ success: false, error: 'Se requiere periodo_id o fechas' });
+    }
+});
+
+// Registrar pago desde planilla
+app.post('/api/registrar-pago-planilla', (req, res) => {
+    const { EmpId, categoria_id, monto, fecha_gasto, descripcion, periodo_id } = req.body;
+    
+    if (!EmpId || !categoria_id || !monto) {
+        return res.status(400).json({ success: false, message: 'Faltan campos requeridos' });
+    }
+    
+    const query = `
+        INSERT INTO gastos (descripcion, monto, categoria_id, periodo_id, EmpId, fecha_gasto)
+        VALUES (?, ?, ?, ?, ?, ?)
+    `;
+    
+    pool.query(query, [descripcion || 'Pago registrado', monto, categoria_id, periodo_id || null, EmpId, fecha_gasto], (err, result) => {
+        if (err) {
+            console.error('Error:', err);
+            return res.status(500).json({ success: false, message: 'Error al registrar pago' });
+        }
+        res.json({ success: true, message: 'Pago registrado correctamente' });
+    });
+});
+
+
+
+
+
+
+
+
+
 
 // Reporte de asistencia
 // Endpoint para obtener reporte de asistencia con HorasExtras
