@@ -475,6 +475,14 @@ app.get('/api/dashboard-ventas', (req, res) => {
 
 
 
+
+
+
+
+
+
+
+
 const promisePool = pool.promise();
 
 // ============================================
@@ -1122,6 +1130,261 @@ app.get('/api/horarios/excepciones', async (req, res) => {
     } catch (error) {
         console.error('❌ Error obteniendo excepciones:', error);
         res.status(500).json({ error: error.message });
+    }
+});
+
+
+// ============================================================
+// HELPER
+// ============================================================
+const minutosAHoras = (minutos) => {
+    if (!minutos || minutos === 0) return '0:00';
+    const signo = minutos < 0 ? '-' : '';
+    const abs = Math.abs(minutos);
+    const h = Math.floor(abs / 60);
+    const m = abs % 60;
+    return `${signo}${h}:${m.toString().padStart(2, '0')}`;
+};
+
+// ============================================================
+// 1. OBTENER ACUMULADO DE COBROS
+// GET /api/horas-extras/acumulado/:empId?fecha_inicio=&fecha_fin=
+// ============================================================
+app.get('/api/horas-extras/acumulado/:empId', async (req, res) => {
+    try {
+        const { empId } = req.params;
+        const { fecha_inicio, fecha_fin } = req.query;
+
+        let query = `
+            SELECT 
+                COALESCE(SUM(MinutosCobrados), 0) AS MinutosCobrados,
+                COUNT(*) AS TotalCobros
+            FROM CobrosHorasExtras
+            WHERE EmpId = ? AND Estado = 'ACTIVO'
+        `;
+        const params = [empId];
+
+        if (fecha_inicio && fecha_fin) {
+            query += ` AND FechaCobro BETWEEN ? AND ?`;
+            params.push(fecha_inicio, fecha_fin);
+        }
+
+        const [rows] = await promisePool.query(query, params);
+
+        res.json({
+            success: true,
+            data: {
+                minutosCobrados: rows[0].MinutosCobrados,
+                horasCobradas: minutosAHoras(rows[0].MinutosCobrados),
+                totalCobros: rows[0].TotalCobros
+            }
+        });
+    } catch (error) {
+        console.error('Error acumulado HE:', error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+});
+
+// ============================================================
+// 2. REGISTRAR UN COBRO DE HORAS EXTRAS
+// POST /api/horas-extras/cobrar
+// ============================================================
+app.post('/api/horas-extras/cobrar', async (req, res) => {
+    const conn = await promisePool.getConnection();
+    try {
+        const {
+            empId,
+            fechaCobro,
+            minutosCobrados,
+            tipoCobro,
+            observaciones,
+            diferenciaBrutaMinutos
+        } = req.body;
+
+        if (!empId || !fechaCobro || !minutosCobrados || minutosCobrados <= 0) {
+            conn.release();
+            return res.status(400).json({
+                success: false,
+                message: 'Datos incompletos o inválidos'
+            });
+        }
+
+        if (!diferenciaBrutaMinutos || diferenciaBrutaMinutos <= 0) {
+            conn.release();
+            return res.status(400).json({
+                success: false,
+                message: 'El empleado no tiene horas extras a favor en el período'
+            });
+        }
+
+        await conn.beginTransaction();
+
+        const [saldoRows] = await conn.query(
+            `SELECT COALESCE(SUM(MinutosCobrados), 0) AS YaCobrados
+             FROM CobrosHorasExtras
+             WHERE EmpId = ? AND Estado = 'ACTIVO'
+             FOR UPDATE`,
+            [empId]
+        );
+
+        const yaCobrados = saldoRows[0].YaCobrados;
+        const saldoDisponible = diferenciaBrutaMinutos - yaCobrados;
+
+        if (minutosCobrados > saldoDisponible) {
+            await conn.rollback();
+            conn.release();
+            return res.status(400).json({
+                success: false,
+                message: `Saldo insuficiente. Disponible: ${minutosAHoras(saldoDisponible)}`
+            });
+        }
+
+        const [insertResult] = await conn.query(
+            `INSERT INTO CobrosHorasExtras 
+                (EmpId, FechaCobro, MinutosCobrados, TipoCobro, Observaciones, UsuarioRegistro, Estado)
+             VALUES (?, ?, ?, ?, ?, ?, 'ACTIVO')`,
+            [
+                empId,
+                fechaCobro,
+                minutosCobrados,
+                tipoCobro || 'PAGO',
+                observaciones || null,
+                req.user?.id || null
+            ]
+        );
+
+        await conn.commit();
+        conn.release();
+
+        const nuevoSaldo = saldoDisponible - minutosCobrados;
+
+        res.json({
+            success: true,
+            message: 'Cobro registrado correctamente',
+            data: {
+                cobroId: insertResult.insertId,
+                horasCobradas: minutosAHoras(minutosCobrados),
+                minutosCobrados,
+                nuevoSaldo: minutosAHoras(nuevoSaldo),
+                nuevoSaldoMinutos: nuevoSaldo
+            }
+        });
+    } catch (error) {
+        try { await conn.rollback(); } catch (e) {}
+        conn.release();
+        console.error('Error registrar cobro HE:', error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+});
+
+// ============================================================
+// 3. HISTORIAL DE COBROS POR EMPLEADO
+// GET /api/horas-extras/historial/:empId
+// ============================================================
+app.get('/api/horas-extras/historial/:empId', async (req, res) => {
+    try {
+        const { empId } = req.params;
+
+        const [rows] = await promisePool.query(
+            `SELECT 
+                CobroId,
+                EmpId,
+                FechaCobro,
+                MinutosCobrados,
+                TipoCobro,
+                Observaciones,
+                FechaRegistro,
+                Estado,
+                UsuarioRegistro
+             FROM CobrosHorasExtras
+             WHERE EmpId = ?
+             ORDER BY FechaCobro DESC, FechaRegistro DESC`,
+            [empId]
+        );
+
+        const data = rows.map(r => ({
+            ...r,
+            HorasCobradasFormato: minutosAHoras(r.MinutosCobrados)
+        }));
+
+        res.json({ success: true, data });
+    } catch (error) {
+        console.error('Error historial HE:', error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+});
+
+// ============================================================
+// 4. ANULAR UN COBRO (restaura el saldo)
+// PUT /api/horas-extras/cobro/:id/anular
+// ============================================================
+app.put('/api/horas-extras/cobro/:id/anular', async (req, res) => {
+    try {
+        const { id } = req.params;
+
+        const [result] = await promisePool.query(
+            `UPDATE CobrosHorasExtras 
+             SET Estado = 'ANULADO'
+             WHERE CobroId = ? AND Estado = 'ACTIVO'`,
+            [id]
+        );
+
+        if (result.affectedRows === 0) {
+            return res.status(404).json({
+                success: false,
+                message: 'Cobro no encontrado o ya anulado'
+            });
+        }
+
+        res.json({
+            success: true,
+            message: 'Cobro anulado correctamente. El saldo ha sido restaurado.'
+        });
+    } catch (error) {
+        console.error('Error anular cobro HE:', error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+});
+
+// ============================================================
+// 5. RESUMEN GLOBAL DE COBROS (opcional)
+// GET /api/horas-extras/resumen-global?fecha_inicio=&fecha_fin=
+// ============================================================
+app.get('/api/horas-extras/resumen-global', async (req, res) => {
+    try {
+        const { fecha_inicio, fecha_fin } = req.query;
+
+        let query = `
+            SELECT 
+                c.EmpId,
+                e.Nombres,
+                e.Apellidos,
+                COALESCE(SUM(c.MinutosCobrados), 0) AS MinutosCobrados,
+                COUNT(*) AS TotalCobros
+            FROM CobrosHorasExtras c
+            INNER JOIN Empleados e ON e.EmpId = c.EmpId
+            WHERE c.Estado = 'ACTIVO'
+        `;
+        const params = [];
+
+        if (fecha_inicio && fecha_fin) {
+            query += ` AND c.FechaCobro BETWEEN ? AND ?`;
+            params.push(fecha_inicio, fecha_fin);
+        }
+
+        query += ` GROUP BY c.EmpId, e.Nombres, e.Apellidos`;
+
+        const [rows] = await promisePool.query(query, params);
+
+        const data = rows.map(r => ({
+            ...r,
+            HorasCobradasFormato: minutosAHoras(r.MinutosCobrados)
+        }));
+
+        res.json({ success: true, data });
+    } catch (error) {
+        console.error('Error resumen global HE:', error);
+        res.status(500).json({ success: false, message: error.message });
     }
 });
 
