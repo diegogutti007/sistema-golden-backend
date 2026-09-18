@@ -485,6 +485,319 @@ app.get('/api/dashboard-ventas', (req, res) => {
 
 const promisePool = pool.promise();
 
+
+// ============================================================
+// 1. DETALLE DE "POR PAGAR" POR EMPLEADO EN UN PERÍODO
+// GET /api/pagos-personal/por-pagar?periodo_id=X
+// ============================================================
+app.get('/api/pagos-personal/por-pagar', async (req, res) => {
+    try {
+        const { periodo_id } = req.query;
+
+        if (!periodo_id) {
+            return res.status(400).json({ success: false, error: 'periodo_id requerido' });
+        }
+
+        // 1) Rango de fechas del período
+        const [periodoRows] = await promisePool.query(
+            `SELECT periodo_id, nombre, fecha_inicio, fecha_fin 
+             FROM periodo 
+             WHERE periodo_id = ?`,
+            [periodo_id]
+        );
+
+        if (periodoRows.length === 0) {
+            return res.status(404).json({ success: false, error: 'Período no encontrado' });
+        }
+
+        const { fecha_inicio, fecha_fin } = periodoRows[0];
+
+        // 2) Sueldo ganado por asistencia en el período
+        //    Solo cuenta Completo e Incompleto (no Ausente)
+        const [sueldosRows] = await promisePool.query(
+            `SELECT 
+                a.EmpId,
+                COUNT(DISTINCT a.Fecha) AS dias_trabajados,
+                COALESCE(e.Sueldo, 0) AS sueldo_base,
+                COALESCE(e.Sueldo, 0) / 30 AS sueldo_diario,
+                (COUNT(DISTINCT a.Fecha) * (COALESCE(e.Sueldo, 0) / 30)) AS sueldo_ganado
+             FROM asistencia a
+             INNER JOIN empleado e ON e.EmpId = a.EmpId
+             WHERE a.Fecha BETWEEN ? AND ?
+               AND a.Estado IN ('Completo', 'Incompleto')
+             GROUP BY a.EmpId, e.Sueldo`,
+            [fecha_inicio, fecha_fin]
+        );
+
+        // 3) Comisiones ganadas por ventas
+        //    El EmpId está en venta_detalle
+        //    La comisión se calcula con el % del artículo
+        const [comisionesRows] = await promisePool.query(
+            `SELECT 
+                vd.EmpId,
+                COUNT(DISTINCT vd.VentaID) AS total_ventas,
+                COALESCE(SUM(vd.Importe * (COALESCE(tip.Comision, 0) / 100)), 0) AS comision_ganada
+             FROM venta v
+             INNER JOIN venta_detalle vd ON vd.VentaID = v.VentaID
+             INNER JOIN empleado emp ON emp.EmpId = vd.EmpId
+             INNER JOIN tipo_empleado tip ON emp.tipo_EmpId = tip.tipo_EmpId
+             WHERE v.FechaVenta BETWEEN ? AND ?
+               AND v.Estado <> 'Anulada'
+               AND COALESCE(tip.Comision, 0) > 0
+             GROUP BY vd.EmpId`,
+            [fecha_inicio, fecha_fin]
+        );
+
+        // 4) Pagos ya realizados en el período
+        const [pagosRows] = await promisePool.query(
+            `SELECT 
+                EmpId,
+                SUM(CASE WHEN categoria_id = 2  THEN monto ELSE 0 END) AS sueldo_pagado,
+                SUM(CASE WHEN categoria_id = 11 THEN monto ELSE 0 END) AS bonos_pagados,
+                SUM(CASE WHEN categoria_id = 12 THEN monto ELSE 0 END) AS comisiones_pagadas,
+                SUM(monto) AS total_pagado
+             FROM gastos
+             WHERE periodo_id = ?
+               AND EmpId IS NOT NULL
+               AND categoria_id in (2, 11, 12)
+             GROUP BY EmpId`,
+            [periodo_id]
+        );
+
+        // 5) Combinar por EmpId
+        const mapaSueldos = Object.fromEntries(sueldosRows.map(r => [r.EmpId, r]));
+        const mapaComisiones = Object.fromEntries(comisionesRows.map(r => [r.EmpId, r]));
+        const mapaPagos = Object.fromEntries(pagosRows.map(r => [r.EmpId, r]));
+
+        const empIds = new Set([
+            ...sueldosRows.map(r => r.EmpId),
+            ...comisionesRows.map(r => r.EmpId),
+            ...pagosRows.map(r => r.EmpId)
+        ]);
+
+        const detalle = [];
+        for (const empId of empIds) {
+            const [empRows] = await promisePool.query(
+                `SELECT EmpId, Nombres, Apellidos, DocID, Sueldo 
+                 FROM empleado WHERE EmpId = ?`,
+                [empId]
+            );
+            if (empRows.length === 0) continue;
+            const emp = empRows[0];
+
+            const s = mapaSueldos[empId] || {
+                dias_trabajados: 0,
+                sueldo_base: emp.Sueldo,
+                sueldo_diario: Number(emp.Sueldo) / 30,
+                sueldo_ganado: 0
+            };
+            const c = mapaComisiones[empId] || { total_ventas: 0, comision_ganada: 0 };
+            const p = mapaPagos[empId] || {
+                sueldo_pagado: 0,
+                bonos_pagados: 0,
+                comisiones_pagadas: 0,
+                total_pagado: 0
+            };
+
+            const totalGanado = Number(s.sueldo_ganado) + Number(c.comision_ganada);
+            const totalPagado = Number(p.total_pagado);
+            const porPagar = totalGanado - totalPagado;
+
+            detalle.push({
+                EmpId: emp.EmpId,
+                Nombres: emp.Nombres,
+                Apellidos: emp.Apellidos,
+                DocID: emp.DocID,
+                Sueldo: Number(emp.Sueldo) || 0,
+
+                // Sueldo
+                dias_trabajados: Number(s.dias_trabajados) || 0,
+                sueldo_diario: Number(s.sueldo_diario) || 0,
+                sueldo_ganado: Number(s.sueldo_ganado) || 0,
+                sueldo_pagado: Number(p.sueldo_pagado) || 0,
+                sueldo_pendiente: Number(s.sueldo_ganado) - Number(p.sueldo_pagado),
+
+                // Comisiones
+                total_ventas: Number(c.total_ventas) || 0,
+                comision_ganada: Number(c.comision_ganada) || 0,
+                comisiones_pagadas: Number(p.comisiones_pagadas) || 0,
+                comisiones_pendientes: Number(c.comision_ganada) - Number(p.comisiones_pagadas),
+
+                // Bonos
+                bonos_pagados: Number(p.bonos_pagados) || 0,
+
+                // Totales
+                total_ganado: totalGanado,
+                total_pagado: totalPagado,
+                por_pagar: porPagar
+            });
+        }
+
+        // 6) Resumen global
+        const resumen = detalle.reduce(
+            (acc, d) => {
+                acc.total_sueldos_ganados += d.sueldo_ganado;
+                acc.total_comisiones_ganadas += d.comision_ganada;
+                acc.total_pagado += d.total_pagado;
+                acc.total_por_pagar += d.por_pagar;
+                if (d.por_pagar > 0) acc.empleados_con_deuda += 1;
+                return acc;
+            },
+            {
+                total_sueldos_ganados: 0,
+                total_comisiones_ganadas: 0,
+                total_pagado: 0,
+                total_por_pagar: 0,
+                empleados_con_deuda: 0,
+                total_empleados: detalle.length
+            }
+        );
+
+        res.json({
+            success: true,
+            data: {
+                periodo: periodoRows[0],
+                detalle,
+                resumen
+            }
+        });
+    } catch (error) {
+        console.error('Error por-pagar:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// ============================================================
+// 2. DETALLE DE UN EMPLEADO (asistencia + ventas + pagos)
+// GET /api/pagos-personal/por-pagar/detalle/:empId?periodo_id=X
+// ============================================================
+app.get('/api/pagos-personal/por-pagar/detalle/:empId', async (req, res) => {
+    try {
+        const { empId } = req.params;
+        const { periodo_id } = req.query;
+
+        const [periodoRows] = await promisePool.query(
+            `SELECT fecha_inicio, fecha_fin FROM periodo WHERE periodo_id = ?`,
+            [periodo_id]
+        );
+        if (periodoRows.length === 0) {
+            return res.status(404).json({ success: false, error: 'Período no encontrado' });
+        }
+        const { fecha_inicio, fecha_fin } = periodoRows[0];
+
+        // Asistencias
+        const [asistencias] = await promisePool.query(
+            `SELECT 
+                AsistenciaID,
+                Fecha,
+                HoraEntrada,
+                HoraSalida,
+                HorasTrabajadas,
+                HorasExtras,
+                Estado,
+                EsTardanza,
+                MinutosTardanza
+             FROM asistencia
+             WHERE EmpId = ?
+               AND Fecha BETWEEN ? AND ?
+             ORDER BY Fecha`,
+            [empId, fecha_inicio, fecha_fin]
+        );
+
+        // Ventas / comisiones
+        // EmpId está en venta_detalle
+        const [ventas] = await promisePool.query(
+            `SELECT 
+                v.VentaID,
+                v.FechaVenta AS Fecha,
+                v.Total AS TotalVenta,
+                vd.DetalleID,
+                vd.ArticuloID,
+                art.Nombre AS Articulo,
+                vd.Cantidad,
+                vd.PrecioUnitario AS Precio,
+                vd.Importe AS Subtotal,
+                COALESCE(tip.Comision, 0) AS PorcentajeComision,
+                (vd.Importe * (COALESCE(tip.Comision, 0) / 100)) AS ComisionCalculada
+             FROM venta v
+             INNER JOIN venta_detalle vd ON vd.VentaID = v.VentaID
+             INNER JOIN empleado emp ON emp.EmpId = vd.EmpId
+             INNER JOIN tipo_empleado tip ON emp.tipo_EmpId = tip.tipo_EmpId
+             INNER JOIN articulo art ON vd.ArticuloID = art.ArticuloID
+             WHERE vd.EmpId = ?
+               AND v.FechaVenta BETWEEN ? AND ?
+               AND v.Estado <> 'Anulada'
+             ORDER BY v.FechaVenta, v.VentaID`,
+            [empId, fecha_inicio, fecha_fin]
+        );
+
+        // Pagos del período
+        const [pagos] = await promisePool.query(
+            `SELECT 
+                gasto_id, fecha_gasto, categoria_id, monto, descripcion, observaciones
+             FROM gastos
+             WHERE EmpId = ?
+               AND periodo_id = ?
+               AND categoria_id in (2, 11, 12)
+             ORDER BY fecha_gasto`,
+            [empId, periodo_id]
+        );
+
+        // Cálculos
+        const diasTrabajados = asistencias.filter(
+            a => a.Estado === 'Completo' || a.Estado === 'Incompleto'
+        ).length;
+
+        const [empRows] = await promisePool.query(
+            `SELECT Sueldo FROM empleado WHERE EmpId = ?`,
+            [empId]
+        );
+        const sueldoBase = Number(empRows[0]?.Sueldo) || 0;
+        const sueldoDiario = sueldoBase / 30;
+        const sueldoGanado = diasTrabajados * sueldoDiario;
+
+        const comisionGanada = ventas.reduce(
+            (sum, v) => sum + Number(v.ComisionCalculada || 0),
+            0
+        );
+
+        const totalPagado = pagos.reduce((sum, p) => sum + Number(p.monto || 0), 0);
+        const totalGanado = sueldoGanado + comisionGanada;
+        const porPagar = totalGanado - totalPagado;
+
+        res.json({
+            success: true,
+            data: {
+                periodo: { fecha_inicio, fecha_fin },
+                sueldo: {
+                    base: sueldoBase,
+                    diario: sueldoDiario,
+                    dias_trabajados: diasTrabajados,
+                    ganado: sueldoGanado
+                },
+                comisiones: {
+                    total_ventas: new Set(ventas.map(v => v.VentaID)).size,
+                    ganado: comisionGanada
+                },
+                pagos,
+                asistencias,
+                ventas,
+                totales: {
+                    total_ganado: totalGanado,
+                    total_pagado: totalPagado,
+                    por_pagar: porPagar
+                }
+            }
+        });
+    } catch (error) {
+        console.error('Error detalle por-pagar:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+
+
+
 // ============================================
 // FUNCIONES AUXILIARES (DEFINIDAS PRIMERO)
 // ============================================
@@ -1362,7 +1675,7 @@ app.get('/api/horas-extras/resumen-global', async (req, res) => {
                 COALESCE(SUM(c.MinutosCobrados), 0) AS MinutosCobrados,
                 COUNT(*) AS TotalCobros
             FROM CobrosHorasExtras c
-            INNER JOIN Empleados e ON e.EmpId = c.EmpId
+            INNER JOIN Empleado e ON e.EmpId = c.EmpId
             WHERE c.Estado = 'ACTIVO'
         `;
         const params = [];
