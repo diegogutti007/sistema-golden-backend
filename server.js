@@ -471,6 +471,290 @@ app.get('/api/dashboard-ventas', (req, res) => {
 });
 
 
+// ============================================
+// ENDPOINTS PARA DASHBOARD DE CITAS
+// ============================================
+
+app.get('/api/dashboard-citas', (req, res) => {
+    const { periodo, year, mes, semana } = req.query;
+    
+    const yearNum = parseInt(year) || new Date().getFullYear();
+    const mesNum = parseInt(mes) || new Date().getMonth() + 1;
+    const semanaNum = parseInt(semana) || 1;
+    
+    let fechaInicio, fechaFin;
+    
+    if (periodo === 'dia') {
+        // Hoy
+        const hoy = new Date();
+        fechaInicio = hoy.toISOString().split('T')[0];
+        fechaFin = fechaInicio;
+    } else if (periodo === 'semana') {
+        // Calcular semana del mes específico
+        const diasEnMes = new Date(yearNum, mesNum, 0).getDate();
+        const diaInicio = (semanaNum - 1) * 7 + 1;
+        const diaFin = Math.min(diaInicio + 6, diasEnMes);
+        
+        fechaInicio = `${yearNum}-${String(mesNum).padStart(2, '0')}-${String(diaInicio).padStart(2, '0')}`;
+        fechaFin = `${yearNum}-${String(mesNum).padStart(2, '0')}-${String(diaFin).padStart(2, '0')}`;
+    } else {
+        // Mes completo
+        const ultimoDia = new Date(yearNum, mesNum, 0).getDate();
+        fechaInicio = `${yearNum}-${String(mesNum).padStart(2, '0')}-01`;
+        fechaFin = `${yearNum}-${String(mesNum).padStart(2, '0')}-${String(ultimoDia).padStart(2, '0')}`;
+    }
+    
+    console.log('Consulta de citas:', { periodo, fechaInicio, fechaFin });
+    
+    const citasQuery = `
+        SELECT 
+            DATE_FORMAT(FechaInicio, '%Y-%m-%d') AS fecha,
+            DATE_FORMAT(FechaInicio, '%H:%i') AS hora,
+            c.Nombre || ' ' || c.Apellido AS cliente,
+            c.Telefono AS telefono,
+            a.Nombre AS servicio,
+            e.Nombres || ' ' || e.Apellidos AS empleado,
+            ci.Estado AS estado,
+            ci.Titulo AS observaciones,
+            ci.CitaId
+        FROM citas ci
+        LEFT JOIN cliente c ON ci.ClienteId = c.ClienteId
+        LEFT JOIN venta v ON v.CitaID = ci.CitaID
+        LEFT JOIN venta_detalle vd ON vd.VentaID = v.VentaID
+        LEFT JOIN articulo a ON a.ArticuloID = vd.ArticuloID
+        LEFT JOIN empleado e ON ci.EmpId = e.EmpId
+        WHERE ci.FechaInicio BETWEEN ? AND ?
+        ORDER BY ci.FechaInicio DESC
+    `;
+    
+    pool.query(citasQuery, [fechaInicio, fechaFin], (err, citas) => {
+        if (err) {
+            console.error('Error:', err);
+            return res.status(500).json({ success: false, error: err.message });
+        }
+        
+        const totalCitas = citas.length;
+        const citasCompletadas = citas.filter(c => c.estado === 'Completada').length;
+        const citasPendientes = citas.filter(c => c.estado === 'Pendiente').length;
+        const citasCanceladas = citas.filter(c => c.estado === 'Cancelada').length;
+        const hoy = new Date().toISOString().split('T')[0];
+        const citasHoy = citas.filter(c => c.fecha === hoy).length;
+        const tasaCompletado = totalCitas > 0 ? (citasCompletadas / totalCitas) * 100 : 0;
+        
+        // Agrupar por día
+        const citasPorDia = {};
+        citas.forEach(c => {
+            if (!citasPorDia[c.fecha]) {
+                citasPorDia[c.fecha] = { fecha: c.fecha, total: 0, completadas: 0 };
+            }
+            citasPorDia[c.fecha].total++;
+            if (c.estado === 'Completada') citasPorDia[c.fecha].completadas++;
+        });
+        
+        // **IMPORTANTE: Generar todos los días del rango, incluso sin citas**
+        const citasDiarias = [];
+        const fechaInicioDate = new Date(fechaInicio);
+        const fechaFinDate = new Date(fechaFin);
+        
+        for (let d = new Date(fechaInicioDate); d <= fechaFinDate; d.setDate(d.getDate() + 1)) {
+            const fechaStr = d.toISOString().split('T')[0];
+            citasDiarias.push(citasPorDia[fechaStr] || { 
+                fecha: fechaStr, 
+                total: 0, 
+                completadas: 0 
+            });
+        }
+        
+        // Top clientes
+        const clientesCount = {};
+        citas.forEach(c => {
+            if (!clientesCount[c.cliente]) {
+                clientesCount[c.cliente] = { nombre: c.cliente, total_citas: 0 };
+            }
+            clientesCount[c.cliente].total_citas++;
+        });
+        const topClientes = Object.values(clientesCount)
+            .sort((a, b) => b.total_citas - a.total_citas)
+            .slice(0, 5);
+        
+        // Citas por servicio
+        const serviciosCount = {};
+        citas.forEach(c => {
+            if (!serviciosCount[c.servicio]) {
+                serviciosCount[c.servicio] = { nombre: c.servicio, total: 0 };
+            }
+            serviciosCount[c.servicio].total++;
+        });
+        const citasPorServicio = Object.values(serviciosCount)
+            .sort((a, b) => b.total - a.total)
+            .slice(0, 5);
+        
+        // Citas por empleado
+        const empleadosCount = {};
+        citas.forEach(c => {
+            if (!empleadosCount[c.empleado]) {
+                empleadosCount[c.empleado] = { nombre: c.empleado, total: 0 };
+            }
+            empleadosCount[c.empleado].total++;
+        });
+        const citasPorEmpleado = Object.values(empleadosCount)
+            .sort((a, b) => b.total - a.total)
+            .slice(0, 5);
+        
+        res.json({
+            success: true,
+            data: {
+                citas_diarias: citasDiarias,
+                estadisticas: {
+                    totalCitas,
+                    citasCompletadas,
+                    citasPendientes,
+                    citasCanceladas,
+                    citasHoy,
+                    tasaCompletado,
+                    crecimiento: 0
+                },
+                top_clientes: topClientes,
+                citas_por_servicio: citasPorServicio,
+                citas_por_empleado: citasPorEmpleado,
+                detalle_citas: citas
+            }
+        });
+    });
+});
+
+
+/* 
+app.get('/api/dashboard-citas', (req, res) => {
+    const { periodo, year, mes } = req.query;
+    
+    const yearNum = parseInt(year) || new Date().getFullYear();
+    const mesNum = parseInt(mes) || new Date().getMonth() + 1;
+    
+    let fechaInicio, fechaFin;
+    
+    if (periodo === 'dia') {
+        const hoy = new Date().toISOString().split('T')[0];
+        fechaInicio = hoy;
+        fechaFin = hoy;
+    } else if (periodo === 'semana') {
+        const hoy = new Date();
+        const diaSemana = hoy.getDay();
+        const diff = diaSemana === 0 ? 6 : diaSemana - 1;
+        const lunes = new Date(hoy);
+        lunes.setDate(hoy.getDate() - diff);
+        const domingo = new Date(lunes);
+        domingo.setDate(lunes.getDate() + 6);
+        fechaInicio = lunes.toISOString().split('T')[0];
+        fechaFin = domingo.toISOString().split('T')[0];
+    } else {
+        const ultimoDia = new Date(yearNum, mesNum, 0).getDate();
+        fechaInicio = `${yearNum}-${String(mesNum).padStart(2, '0')}-01`;
+        fechaFin = `${yearNum}-${String(mesNum).padStart(2, '0')}-${String(ultimoDia).padStart(2, '0')}`;
+    }
+    
+    // Query principal de citas
+    const citasQuery = `
+        SELECT 
+            DATE_FORMAT(FechaInicio, '%Y-%m-%d') AS fecha,
+            DATE_FORMAT(FechaInicio, '%H:%i') AS hora,
+            c.Nombre || ' ' || c.Apellido AS cliente,
+            c.Telefono AS telefono,
+            a.Nombre AS servicio,
+            e.Nombres || ' ' || e.Apellidos AS empleado,
+            ci.Estado AS estado,
+            ci.Titulo AS observaciones,
+            ci.CitaId
+        FROM citas ci
+        LEFT JOIN cliente c ON ci.ClienteId = c.ClienteId
+        LEFT JOIN venta v ON v.CitaID = ci.CitaID
+        LEFT JOIN venta_detalle vd ON vd.VentaID = v.VentaID
+        LEFT JOIN articulo a ON a.ArticuloID = vd.ArticuloID
+        LEFT JOIN empleado e ON ci.EmpId = e.EmpId
+        WHERE ci.FechaInicio BETWEEN ? AND ?
+        ORDER BY ci.FechaInicio DESC
+    `;
+    
+    pool.query(citasQuery, [fechaInicio, fechaFin], (err, citas) => {
+        if (err) {
+            console.error('Error:', err);
+            return res.status(500).json({ success: false, error: err.message });
+        }
+        
+        // Procesar estadísticas
+        const totalCitas = citas.length;
+        const citasCompletadas = citas.filter(c => c.estado === 'Completada').length;
+        const citasPendientes = citas.filter(c => c.estado === 'Pendiente').length;
+        const citasCanceladas = citas.filter(c => c.estado === 'Cancelada').length;
+        const hoy = new Date().toISOString().split('T')[0];
+        const citasHoy = citas.filter(c => c.fecha === hoy).length;
+        const tasaCompletado = totalCitas > 0 ? (citasCompletadas / totalCitas) * 100 : 0;
+        
+        // Agrupar por día para el gráfico
+        const citasPorDia = {};
+        citas.forEach(c => {
+            if (!citasPorDia[c.fecha]) {
+                citasPorDia[c.fecha] = { fecha: c.fecha, total: 0, completadas: 0 };
+            }
+            citasPorDia[c.fecha].total++;
+            if (c.estado === 'Completada') citasPorDia[c.fecha].completadas++;
+        });
+        
+        const citasDiarias = Object.values(citasPorDia).sort((a, b) => a.fecha.localeCompare(b.fecha));
+        
+        // Top clientes
+        const clientesCount = {};
+        citas.forEach(c => {
+            if (!clientesCount[c.cliente]) {
+                clientesCount[c.cliente] = { nombre: c.cliente, total_citas: 0 };
+            }
+            clientesCount[c.cliente].total_citas++;
+        });
+        const topClientes = Object.values(clientesCount).sort((a, b) => b.total_citas - a.total_citas).slice(0, 5);
+        
+        // Citas por servicio
+        const serviciosCount = {};
+        citas.forEach(c => {
+            if (!serviciosCount[c.servicio]) {
+                serviciosCount[c.servicio] = { nombre: c.servicio, total: 0 };
+            }
+            serviciosCount[c.servicio].total++;
+        });
+        const citasPorServicio = Object.values(serviciosCount).sort((a, b) => b.total - a.total).slice(0, 5);
+        
+        // Citas por empleado
+        const empleadosCount = {};
+        citas.forEach(c => {
+            if (!empleadosCount[c.empleado]) {
+                empleadosCount[c.empleado] = { nombre: c.empleado, total: 0 };
+            }
+            empleadosCount[c.empleado].total++;
+        });
+        const citasPorEmpleado = Object.values(empleadosCount).sort((a, b) => b.total - a.total).slice(0, 5);
+        
+        res.json({
+            success: true,
+            data: {
+                citas_diarias: citasDiarias,
+                estadisticas: {
+                    totalCitas,
+                    citasCompletadas,
+                    citasPendientes,
+                    citasCanceladas,
+                    citasHoy,
+                    tasaCompletado,
+                    crecimiento: 0
+                },
+                top_clientes: topClientes,
+                citas_por_servicio: citasPorServicio,
+                citas_por_empleado: citasPorEmpleado,
+                detalle_citas: citas
+            }
+        });
+    });
+});
+
+ */
 
 
 
@@ -4939,6 +5223,9 @@ app.delete('/api/clientes/:id', (req, res) => {
     });
   });
 });
+
+
+
 
 
 
